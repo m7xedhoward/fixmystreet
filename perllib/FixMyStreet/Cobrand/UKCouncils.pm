@@ -326,8 +326,8 @@ sub munge_report_new_bodies {
         my $c = $self->{c};
         my $he = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $c });
         my $on_he_road = $c->stash->{on_he_road} = $he->report_new_is_on_he_road;
-
-        if (!$on_he_road) {
+        my $on_he_road_for_litter = $c->stash->{on_he_road_for_litter} = $he->report_new_is_on_he_road_for_litter;
+        if (!$on_he_road && !$on_he_road_for_litter) {
             %$bodies = map { $_->id => $_ } grep { $_->name ne 'Highways England' } values %$bodies;
         }
     }
@@ -347,6 +347,10 @@ sub munge_report_new_contacts {
         # Presented categories vary if we're on/off a red route
         my $tfl = FixMyStreet::Cobrand->get_class_for_moniker( 'tfl' )->new({ c => $self->{c} });
         $tfl->munge_red_route_categories($contacts);
+    }
+    if ( $bodies{'Highways England'} ) {
+        my $he = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $self->{c}} );
+        $he->check_for_litter_responsibility($contacts);
     }
 }
 

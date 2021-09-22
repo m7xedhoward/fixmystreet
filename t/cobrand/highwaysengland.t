@@ -17,7 +17,7 @@ END { FixMyStreet::App->log->enable('info'); }
 my $ukc = Test::MockModule->new('FixMyStreet::Cobrand::UKCouncils');
 $ukc->mock('_fetch_features', sub {
     my ($self, $cfg, $x, $y) = @_;
-    is $y, 259573, 'Correct latitude';
+    is $y, 52.23025, "Correct latitude";
     return [
         {
             properties => { area_name => 'Area 1', ROA_NUMBER => 'M1', sect_label => 'M1/111' },
@@ -106,7 +106,7 @@ FixMyStreet::override_config {
     };
 
     subtest 'check not in a group' => sub {
-        my $j = $mech->get_ok_json('/report/new/ajax?latitude=52.236251&longitude=-0.892052&w=1');
+        my $j = $mech->get_ok_json('/report/new/ajax?latitude=52.23025&longitude=-0.892052&w=1');
         is $j->{subcategories}, undef;
     }
 };
@@ -167,5 +167,62 @@ subtest 'Dashboard CSV extra columns' => sub {
     $mech->content_contains(join ',', @row1);
     $mech->content_contains('http://highwaysengland.example.org/report/' . $problem2->id .',mobile,fixmystreet,,"Area 7","Search engine"');
 };
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => 'highwaysengland',
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+    subtest 'fixmystreet changes litter options for Highways England' => sub {
+        my $he_mod = Test::MockModule->new('FixMyStreet::Cobrand::HighwaysEngland');
+        $he_mod->mock('report_new_is_on_he_road', sub { 1 });
+        $he_mod->mock('report_new_is_on_he_road_for_litter', sub { 1 });
+        my $bexley = $mech->create_body_ok(2494, 'London Borough of Bexley');
+        my $he = $mech->create_body_ok(2494, 'Highways England');
+        $mech->create_contact_ok(body_id => $bexley->id, category => 'Flytipping', email => 'foo@bexley');
+        $mech->create_contact_ok(body_id => $bexley->id, category => 'Trees', email => 'foo@bexley');
+        $mech->create_contact_ok(body_id => $he->id, category => 'Litter', email => 'litter@he');
+        $mech->create_contact_ok(body_id => $he->id, category => 'Potholes', email => 'potholes@he');
+        $mech->get_ok("/report/new/ajax?latitude=51.466707&longitude=0.181108");
+        $mech->content_contains('Litter');
+        $mech->content_lacks('Flytipping');
+    };
+};
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => 'highwaysengland',
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+    subtest 'fixmystreet changes litter options for Highways England' => sub {
+        my $he_mod = Test::MockModule->new('FixMyStreet::Cobrand::HighwaysEngland');
+        $he_mod->mock('report_new_is_on_he_road', sub { 0 });
+        $he_mod->mock('report_new_is_on_he_road_for_litter', sub { 1 });
+        my $bexley = $mech->create_body_ok(2494, 'London Borough of Bexley');
+        my $he = $mech->create_body_ok(2494, 'Highways England');
+        $mech->create_contact_ok(body_id => $bexley->id, category => 'Flytipping', email => 'foo@bexley');
+        $mech->create_contact_ok(body_id => $he->id, category => 'Litter', email => 'litter@he');
+        $mech->get_ok("/report/new/ajax?latitude=51.466707&longitude=0.181108");
+        $mech->content_contains('Litter');
+        $mech->content_lacks('Flytipping');
+    };
+};
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => 'highwaysengland',
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+    subtest 'fixmystreet changes litter options for Highways England' => sub {
+        my $he_mod = Test::MockModule->new('FixMyStreet::Cobrand::HighwaysEngland');
+        $he_mod->mock('report_new_is_on_he_road', sub { 1 });
+        $he_mod->mock('report_new_is_on_he_road_for_litter', sub { 0 });
+        my $bexley = $mech->create_body_ok(2494, 'London Borough of Bexley');
+        my $he = $mech->create_body_ok(2494, 'Highways England');
+        $mech->create_contact_ok(body_id => $bexley->id, category => 'Flytipping', email => 'foo@bexley');
+        $mech->create_contact_ok(body_id => $he->id, category => 'Litter', email => 'litter@he');
+        $mech->get_ok("/report/new/ajax?latitude=51.466707&longitude=0.181108");
+        $mech->content_lacks('Litter');
+        $mech->content_contains('Flytipping');
+    };
+};
+
 
 done_testing();
