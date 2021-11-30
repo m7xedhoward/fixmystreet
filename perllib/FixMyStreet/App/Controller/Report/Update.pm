@@ -149,7 +149,7 @@ sub process_user : Private {
 
     my $parsed = FixMyStreet::SMS->parse_username($params{username});
     my $type = $parsed->{type} || 'email';
-    $type = 'email' unless FixMyStreet->config('SMS_AUTHENTICATION') || $c->stash->{contributing_as_another_user};
+    $type = 'email' unless $c->cobrand->sms_authentication || $c->stash->{contributing_as_another_user};
     $update->user( $c->model('DB::User')->find_or_new( { $type => $parsed->{username} } ) );
 
     $c->stash->{phone_may_be_mobile} = $type eq 'phone' && $parsed->{may_be_mobile};
@@ -353,6 +353,11 @@ sub process_update : Private {
         $update->extra( $extra );
     }
 
+    my $private_comments = $c->get_param('private_comments');
+    if ( $private_comments ) {
+        $update->set_extra_metadata(private_comments => $private_comments);
+    }
+
     $c->stash->{add_alert} = $c->get_param('add_alert');
 
     return 1;
@@ -484,6 +489,12 @@ sub save_update : Private {
         $c->forward('/auth/social/handle_sign_in') if $c->get_param('social_sign_in');
     }
 
+    if ($c->user_exists) {
+        if ($c->user->is_superuser || $c->user->from_body) {
+            $update->set_extra_metadata( contributed_by => $c->user->id );
+        }
+    }
+
     if ( $c->cobrand->never_confirm_updates ) {
         $update->user->update_or_insert;
         $update->confirm();
@@ -491,20 +502,12 @@ sub save_update : Private {
     # but we don't want to update the user account
     } elsif ($c->stash->{contributing_as_another_user}) {
         $update->set_extra_metadata( contributed_as => 'another_user');
-        $update->set_extra_metadata( contributed_by => $c->user->id );
         $update->confirm();
     } elsif ($c->stash->{contributing_as_body}) {
         $update->set_extra_metadata( contributed_as => 'body' );
         $update->confirm();
     } elsif ($c->stash->{contributing_as_anonymous_user}) {
         $update->set_extra_metadata( contributed_as => 'anonymous_user' );
-        if ( $c->user_exists && $c->user->from_body ) {
-            # If a staff user has clicked the 'report anonymously' button then
-            # there would be no record of who that staff member was as we've
-            # used the cobrand's anonymous_account for the report. In this case
-            # record the staff user ID in the report metadata.
-            $update->set_extra_metadata( contributed_by => $c->user->id );
-        }
         $update->confirm();
     } elsif ( !$update->user->in_storage ) {
         # User does not exist.

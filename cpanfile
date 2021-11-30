@@ -7,6 +7,7 @@ requires 'Class::Unload';
 requires 'ExtUtils::MakeMaker', '7.20';
 requires 'ExtUtils::ParseXS', '3.30'; # [1]
 # requires 'MooseX::NonMoose'; # [2]
+requires 'Test::Differences', '0.67'; # [3]
 
 # Minimum versions of dependencies to upgrade for bugfixes
 requires 'CGI', '4.43';
@@ -51,6 +52,8 @@ requires 'Authen::SASL';
 requires 'Cache::Memcached';
 requires 'Carp';
 requires 'Crypt::Eksblowfish::Bcrypt';
+requires 'Crypt::JWT';
+requires 'Crypt::Digest::SHA256';
 requires 'Data::Password::Common';
 requires 'DateTime', '1.51';
 requires 'DateTime::Format::Flexible';
@@ -74,7 +77,7 @@ requires 'Digest::MD5';
 requires 'Digest::SHA';
 requires 'Email::Address', '1.912';
 requires 'Email::MIME', '1.946';
-requires 'Email::Sender';
+requires 'Email::Sender', '1.300035';
 requires 'Email::Valid';
 requires 'Error';
 requires 'FCGI'; # Required by e.g. Plack::Handler::FCGI
@@ -109,7 +112,7 @@ requires 'Net::Domain::TLD', '1.75';
 requires 'Net::Facebook::Oauth2', '0.11';
 requires 'Net::OAuth';
 requires 'Net::Twitter::Lite::WithAPIv1_1', '0.12008';
-requires 'Number::Phone', '3.5000';
+requires 'Number::Phone', '3.7002';
 requires 'OIDC::Lite';
 requires 'Parallel::ForkManager';
 requires 'Path::Class';
@@ -172,6 +175,7 @@ recommends 'Mac::FSEvents' if $^O eq 'darwin';
 # Modules used by the test suite
 requires 'Test::PostgreSQL', '1.27';
 requires 'CGI::Simple';
+requires 'HTML::Selector::Element';
 requires 'HTTP::Headers';
 requires 'HTTP::Response';
 requires 'LWP::Protocol::PSGI';
@@ -188,7 +192,7 @@ requires 'Web::Scraper';
 requires 'Web::Simple';
 
 # Default root certificates used by LWP::UserAgent
-requires 'Mozilla::CA', '20200520';
+requires 'Mozilla::CA', '20211001';
 
 #################################################################
 # [1] Params::Classify 0.13 installs XS, but 0.15 will only do so
@@ -203,3 +207,7 @@ requires 'Mozilla::CA', '20200520';
 # fails. The easiest solution here is to include MooseX::NonMoose in
 # cpanfile.snapshot so it can be found, though I guess it shouldn't be trying
 # to install it if it's already thought that 0.22 was installed...
+#
+# [3] Test::Differences 0.64 had a Build.PL that required Text::Diff 0.35, but
+# a Makefile.PL that required 1.43. This can confuse installation, so make sure
+# we have a more recent version of Test::Differences to resolve this.

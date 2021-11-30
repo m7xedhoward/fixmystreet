@@ -7,6 +7,9 @@ use FixMyStreet::DB;
 
 has send_comments_flag => ( is => 'ro' );
 
+# Default is yes, as this has previously been assumed
+has commit => ( is => 'ro', default => 1 );
+
 has system_user => ( is => 'rw' );
 has body => ( is => 'ro', default => sub { undef } );
 has verbose => ( is => 'ro', default => 0 );
@@ -59,17 +62,23 @@ sub fetch {
     while ( my $body = $bodies->next ) {
         $pm->start and next;
 
-        $self->current_body( $body );
+        $self->initialise_body( $body );
         $self->_set_current_open311( $open311 || $self->_build_current_open311 );
-        $self->suppress_alerts( $body->suppress_alerts );
-        $self->blank_updates_permitted( $body->blank_updates_permitted );
-        $self->system_user( $body->comment_user );
         $self->process_body();
 
         $pm->finish;
     }
 
     $pm->wait_all_children;
+}
+
+sub initialise_body {
+    my ($self, $body) = @_;
+
+    $self->current_body( $body );
+    $self->suppress_alerts( $body->suppress_alerts );
+    $self->blank_updates_permitted( $body->blank_updates_permitted );
+    $self->system_user( $body->comment_user );
 }
 
 sub _build_current_open311 {
@@ -213,6 +222,9 @@ sub process_update {
     # will *also* reshift comment->created's time zone to TIME_ZONE.
     my $created = $comment->created->set_time_zone(FixMyStreet->local_time_zone);
     $p->lastupdate($created->clone);
+
+    return $comment unless $self->commit;
+
     $p->update;
     $comment->insert();
 
@@ -247,10 +259,11 @@ sub comment_text_for_request {
     my $template;
     if ($state_changed || $ext_code_changed) {
         my $order;
-        my $state_params = {
-            'me.state' => $state
-        };
-        if ($ext_code) {
+        my $state_params = {};
+        if ($state_changed) {
+            $state_params->{'me.state'} = $state;
+        }
+        if ($ext_code_changed && $ext_code) {
             $state_params->{'me.external_status_code'} = $ext_code;
             # make sure that empty string/nulls come last.
             $order = { order_by => \"me.external_status_code DESC NULLS LAST" };
@@ -265,7 +278,7 @@ sub comment_text_for_request {
     }
 
     my $desc = $request->{description} || '';
-    if ($desc && (!$template || $template !~ /\{\{description}}/)) {
+    if ($desc && (!$template || ($template !~ /\{\{description}}/ && !$request->{prefer_template}))) {
         return $desc;
     }
 

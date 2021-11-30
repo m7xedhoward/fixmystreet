@@ -82,7 +82,7 @@
     [% BLOCK category_row %]
       <tr [% IF cat.state == 'deleted' %]class="is-deleted"[% END %]>
         <td class="contact-category"><a href="[% c.uri_for_action( '/admin/bodies/edit', [ body_id ], cat.category ) %]">[% cat.category_display | html %]</a>
-            <br>[% cat.email | html %]</td>
+            <br>[% cat.email.replace('([;,])', '$1 ') %]</td>
         <td>
             [% cat.state %]
           [% IF cat.non_public OR (body.can_be_devolved AND cat.send_method) %]
@@ -104,7 +104,6 @@
       </tr>
     [% END %]
 
-  [%~ IF category_groups.size ~%]
     [%~ FOREACH group IN category_groups ~%]
       [% IF group.name %]
         <tr>
@@ -115,11 +114,6 @@
             [% INCLUDE category_row %]
         [%~ END ~%]
     [%~ END =%]
-  [%~ ELSE ~%]
-    [%~ FOREACH cat IN contacts ~%]
-        [% INCLUDE category_row %]
-    [%~ END =%]
-  [%~ END ~%]
 
   </table>
 

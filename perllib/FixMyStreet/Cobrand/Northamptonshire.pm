@@ -6,10 +6,11 @@ use warnings;
 
 use Moo;
 with 'FixMyStreet::Roles::ConfirmValidation';
+with 'FixMyStreet::Roles::Open311Alloy';
 
 sub council_area_id { 2234 }
 sub council_area { 'Northamptonshire' }
-sub council_name { 'Northamptonshire County Council' }
+sub council_name { 'Northamptonshire Highways' }
 sub council_url { 'northamptonshire' }
 
 sub enter_postcode_text { 'Enter a Northamptonshire postcode, street name and area, or check an existing report number' }
@@ -27,7 +28,7 @@ sub disambiguate_location {
 
 sub categories_restriction {
     my ($self, $rs) = @_;
-    return $rs->search( { 'body.name' => [ 'Northamptonshire County Council', 'Highways England' ] } );
+    return $rs->search( { 'body.name' => [ $self->council_name, 'National Highways' ] } );
 }
 
 sub send_questionnaires { 0 }
@@ -38,13 +39,6 @@ sub report_sent_confirmation_email { 'id' }
 
 sub admin_user_domain { 'northamptonshire.gov.uk' }
 
-has body_obj => (
-    is => 'lazy',
-    default => sub {
-        FixMyStreet::DB->resultset('Body')->find({ name => 'Northamptonshire County Council' });
-    },
-);
-
 sub updates_disallowed {
     my $self = shift;
     my ($problem) = @_;
@@ -52,14 +46,14 @@ sub updates_disallowed {
     # Only open reports
     return 1 if $problem->is_fixed || $problem->is_closed;
     # Not on reports made by the body user
-    return 1 if $problem->user_id == $self->body_obj->comment_user_id;
+    return 1 if $problem->user_id == $self->body->comment_user_id;
 
     return $self->next::method(@_);
 }
 
 sub is_defect {
     my ($self, $p) = @_;
-    return $p->user_id == $self->body_obj->comment_user_id;
+    return $p->user_id == $self->body->comment_user_id;
 }
 
 sub pin_colour {
@@ -85,26 +79,6 @@ sub get_geocoder { 'OSM' }
 
 sub map_type { 'Northamptonshire' }
 
-sub open311_config {
-    my ($self, $row, $h, $params) = @_;
-
-    $params->{multi_photos} = 1;
-}
-
-sub open311_extra_data_include {
-    my ($self, $row, $h) = @_;
-
-    return [
-        { name => 'report_url',
-          value => $h->{url} },
-        { name => 'title',
-          value => $row->title },
-        { name => 'description',
-          value => $row->detail },
-        { name => 'category',
-          value => $row->category },
-    ];
-}
 sub open311_extra_data_exclude { [ 'emergency' ] }
 
 sub open311_get_update_munging {

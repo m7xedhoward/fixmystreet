@@ -1,3 +1,6 @@
+use strict;
+use warnings;
+
 package FixMyStreet::Email::Error;
 
 use Error qw(:try);
@@ -274,7 +277,7 @@ sub construct_email ($) {
     $body =~ s#(?<!\n)(?<!  )\n(?!\n)# #gs;
     $body =~ s# +$##mg;
 
-    $p->{Subject} = $subject if defined($subject);
+    $p->{Subject} = $subject if !$p->{Subject} && defined($subject);
 
     if (!exists($p->{Subject})) {
         # XXX Try to find out what's causing this very occasionally
@@ -323,6 +326,7 @@ sub construct_email ($) {
         ),
     ];
 
+    my @attachments = @{$p->{_attachments_} || []};
     my $overall_type;
     if ($p->{_html_}) {
         my $html = _mime_create(
@@ -333,7 +337,8 @@ sub construct_email ($) {
                 content_type => 'text/html',
             },
         );
-        if ($p->{_html_images_} || $p->{_attachments_}) {
+        my @html_images = @{$p->{_html_images_} || []};
+        if (@html_images || @attachments) {
             $parts = [ _mime_create(
                 attributes => { content_type => 'multipart/alternative' },
                 parts => [ $parts->[0], $html ]
@@ -344,14 +349,14 @@ sub construct_email ($) {
             push @$parts, $html;
             $overall_type = 'multipart/alternative';
         }
-        if ($p->{_html_images_}) {
-            foreach (@{$p->{_html_images_}}) {
+        if (@html_images) {
+            foreach (@html_images) {
                 my $cid = delete $_->{attributes}->{id};
                 my $part = _mime_create(%$_);
                 $part->header_set('Content-ID' => "<$cid>");
                 push @$parts, $part;
             }
-            if ($p->{_attachments_}) {
+            if (@attachments) {
                 $parts = [ _mime_create(
                     attributes => { content_type => 'multipart/related' },
                     parts => $parts,
@@ -364,8 +369,8 @@ sub construct_email ($) {
         }
     }
 
-    if (@{$p->{_attachments_}}) {
-        push @$parts, map { _mime_create(%$_) } @{$p->{_attachments_}};
+    if (@attachments) {
+        push @$parts, map { _mime_create(%$_) } @attachments;
         $overall_type = 'multipart/mixed';
     }
 

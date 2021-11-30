@@ -10,6 +10,111 @@ my $mech = FixMyStreet::TestMech->new;
 my $oxon = $mech->create_body_ok(2237, 'Oxfordshire County Council');
 my $counciluser = $mech->create_user_ok('counciluser@example.com', name => 'Council User', from_body => $oxon);
 
+my $oxfordshire_cobrand = Test::MockModule->new('FixMyStreet::Cobrand::Oxfordshire');
+
+$oxfordshire_cobrand->mock('defect_wfs_query', sub {
+    return {
+        features => [
+            {
+                properties => {
+                    APPROVAL_STATUS_NAME => 'With Contractor',
+                    ITEM_CATEGORY_NAME => 'Minor Carriageway',
+                    ITEM_TYPE_NAME => 'Pothole',
+                    REQUIRED_COMPLETION_DATE => '2020-11-05T16:41:00Z',
+                },
+                geometry => {
+                    coordinates => [-1.3553, 51.8477],
+                }
+            },
+            {
+                properties => {
+                    APPROVAL_STATUS_NAME => 'With Contractor',
+                    ITEM_CATEGORY_NAME => 'Trees and Hedges',
+                    ITEM_TYPE_NAME => 'Overgrown/Overhanging',
+                    REQUIRED_COMPLETION_DATE => '2020-11-05T16:41:00Z',
+                },
+                geometry => {
+                    coordinates => [-1.3554, 51.8478],
+                }
+            }
+        ]
+    };
+});
+
+subtest 'check /around?ajax gets extra pins from wfs' => sub {
+    $mech->delete_problems_for_body($oxon->id);
+
+    my $latitude = 51.784721;
+    my $longitude = -1.494453;
+    my $bbox = ($longitude - 0.01) . ',' .  ($latitude - 0.01)
+                . ',' . ($longitude + 0.01) . ',' .  ($latitude + 0.01);
+
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'oxfordshire',
+    }, sub {
+        my $json = $mech->get_ok_json( '/around?ajax=1&bbox=' . $bbox );
+        my $pins = $json->{pins};
+        is scalar @$pins, 2, 'defect pins included';
+        my $pin = @$pins[0];
+        is @$pin[4], "Minor Carriageway (Pothole)\nEstimated completion date: Thursday  5 November 2020", 'pin title is correct';
+    }
+};
+
+subtest 'check /around/nearby gets extra pins from wfs' => sub {
+    $mech->delete_problems_for_body($oxon->id);
+
+    my $latitude = 51.784721;
+    my $longitude = -1.494453;
+
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'oxfordshire',
+    }, sub {
+        my $json = $mech->get_ok_json( "/around/nearby?filter_category=Potholes&distance=250&latitude=$latitude&longitude=$longitude" );
+        my $pins = $json->{pins};
+        is scalar @$pins, 2, 'defect pins included';
+        my $pin = @$pins[0];
+        is @$pin[4], "Minor Carriageway (Pothole)\nEstimated completion date: Thursday  5 November 2020", 'pin title is correct';
+    }
+};
+
+subtest 'check /reports/Oxfordshire?ajax gets extra pins from wfs for zoom 15' => sub {
+    $mech->delete_problems_for_body($oxon->id);
+
+    my $latitude = 51.784721;
+    my $longitude = -1.494453;
+    my $bbox = ($longitude - 0.01) . ',' .  ($latitude - 0.01)
+                . ',' . ($longitude + 0.01) . ',' .  ($latitude + 0.01);
+
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'oxfordshire',
+    }, sub {
+        my $json = $mech->get_ok_json( '/reports/Oxfordshire?ajax=1&zoom=15&bbox=' . $bbox );
+        my $pins = $json->{pins};
+        is scalar @$pins, 2, 'defect pins included';
+        my $pin = @$pins[0];
+        is @$pin[4], "Minor Carriageway (Pothole)\nEstimated completion date: Thursday  5 November 2020", 'pin title is correct';
+    }
+};
+
+subtest "check /reports/Oxfordshire?ajax doesn't get extra pins from wfs at zoom 14" => sub {
+    $mech->delete_problems_for_body($oxon->id);
+
+    my $latitude = 51.784721;
+    my $longitude = -1.494453;
+    my $bbox = ($longitude - 0.01) . ',' .  ($latitude - 0.01)
+                . ',' . ($longitude + 0.01) . ',' .  ($latitude + 0.01);
+
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'oxfordshire',
+    }, sub {
+        my $json = $mech->get_ok_json( '/reports/Oxfordshire?ajax=1&zoom=14&bbox=' . $bbox );
+        my $pins = $json->{pins};
+        is scalar @$pins, 0, 'defect pins not included';
+    }
+};
+
+$oxfordshire_cobrand->mock('defect_wfs_query', sub { return { features => [] }; });
+
 subtest 'check /around?ajax defaults to open reports only' => sub {
     my $categories = [ 'Bridges', 'Fences', 'Manhole' ];
     my $params = {
@@ -51,6 +156,39 @@ subtest 'check /around?ajax defaults to open reports only' => sub {
 };
 
 my @problems = FixMyStreet::DB->resultset('Problem')->search({}, { rows => 3, order_by => 'id' })->all;
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => [ 'oxfordshire', 'fixmystreet' ],
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+
+    my $problem1 = $problems[0];
+    $problem1->external_id("132987");
+    $problem1->set_extra_metadata(customer_reference => "ENQ12098123");
+    $problem1->whensent($problem1->confirmed);
+    $problem1->update;
+    my $problem2 = $problems[1];
+    $problem2->update({ external_id => "AlloyV2-687000682500b7000a1f3006", whensent => $problem2->confirmed });
+
+    # reports should display the same info on both cobrands
+    for my $host ( 'oxfordshire.fixmystreet.com', 'www.fixmystreet.com' ) {
+
+        subtest "$host handles external IDs/refs correctly" => sub {
+            ok $mech->host($host);
+
+            $mech->get_ok('/report/' . $problem1->id);
+            $mech->content_lacks($problem1->external_id, "WDM external ID not shown");
+            $mech->content_contains('Council ref:</strong> ENQ12098123', "WDM customer reference is shown");
+
+            $mech->get_ok('/report/' . $problem2->id);
+            $mech->content_lacks($problem2->external_id, "Alloy external ID not shown");
+            $mech->content_contains('Council ref:</strong> ' . $problem2->id, "FMS id is shown");
+        };
+    }
+
+    # Reset for the rest of the tests
+    ok $mech->host('oxfordshire.fixmystreet.com');
+};
 
 FixMyStreet::override_config {
     STAGING_FLAGS => { send_reports => 1, skip_checks => 1 },
@@ -98,7 +236,7 @@ FixMyStreet::override_config {
         $mech->get_ok('/report/' . $problem->id);
         $mech->content_contains('Investigation complete');
 
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         $mech->email_count_is(1);
         my $email = $mech->get_email;
         my $body = $mech->get_text_body_from_email($email);
@@ -116,21 +254,21 @@ FixMyStreet::override_config {
 
         my @rows = $mech->content_as_csv;
         is scalar @rows, 7, '1 (header) + 6 (reports) = 7 lines';
-        is scalar @{$rows[0]}, 21, '21 columns present';
+        is scalar @{$rows[0]}, 22, '22 columns present';
 
         is_deeply $rows[0],
             [
                 'Report ID', 'Title', 'Detail', 'User Name', 'Category',
                 'Created', 'Confirmed', 'Acknowledged', 'Fixed', 'Closed',
                 'Status', 'Latitude', 'Longitude', 'Query', 'Ward',
-                'Easting', 'Northing', 'Report URL', 'Site Used',
+                'Easting', 'Northing', 'Report URL', 'Device Type', 'Site Used',
                 'Reported As', 'HIAMS/Exor Ref',
             ],
             'Column headers look correct';
 
-        is $rows[1]->[20], 'ENQ12456', 'HIAMS reference included in row';
-        is $rows[2]->[20], '', 'Report without HIAMS ref has empty ref field';
-        is $rows[3]->[20], '123098123', 'Older Exor report has correct ref';
+        is $rows[1]->[21], 'ENQ12456', 'HIAMS reference included in row';
+        is $rows[2]->[21], '', 'Report without HIAMS ref has empty ref field';
+        is $rows[3]->[21], '123098123', 'Older Exor report has correct ref';
     };
 
     $oxon->update({
@@ -165,7 +303,7 @@ FixMyStreet::override_config {
             $p->set_extra_fields({ name => $test->{field}, value => $test->{value}});
             $p->update;
 
-            my $test_data = FixMyStreet::Script::Reports::send();
+            FixMyStreet::Script::Reports::send();
 
             $p->discard_changes;
             ok $p->whensent, 'Report marked as sent';
@@ -173,7 +311,7 @@ FixMyStreet::override_config {
             is $p->external_id, 248, 'Report has right external ID';
             unlike $p->detail, qr/$test->{text}:/, $test->{text} . ' not saved to report detail';
 
-            my $req = $test_data->{test_req_used};
+            my $req = Open311->test_req_used;
             my $c = CGI::Simple->new($req->content);
             like $c->param('description'), qr/$test->{text}: $test->{value}/, $test->{text} . ' included in body';
         };
@@ -201,16 +339,12 @@ FixMyStreet::override_config {
                 properties => { TYPE1_2_USRN => 13579 },
             } ];
         });
-        my $test_res = HTTP::Response->new();
-        $test_res->code(200);
-        $test_res->message('OK');
-        $test_res->content('<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>');
+        my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
 
         my $o = Open311->new(
             fixmystreet_body => $oxon,
-            test_mode => 1,
-            test_get_returns => { 'servicerequestupdates.xml' => $test_res },
         );
+        Open311->_inject_response('/servicerequestupdates.xml', $test_res);
 
         $o->post_service_request_update($comment);
         my $cgi = CGI::Simple->new($o->test_req_used->content);

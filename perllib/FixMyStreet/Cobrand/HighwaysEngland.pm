@@ -4,6 +4,8 @@ use parent 'FixMyStreet::Cobrand::UK';
 use strict;
 use warnings;
 
+sub council_name { 'National Highways' }
+
 sub council_url { 'highwaysengland' }
 
 sub site_key { 'highwaysengland' }
@@ -12,22 +14,24 @@ sub restriction { { cobrand => shift->moniker } }
 
 sub hide_areas_on_reports { 1 }
 
-sub all_reports_single_body { { name => 'Highways England' } }
+sub all_reports_single_body { { name => 'National Highways' } }
 
 sub body {
     my $self = shift;
-    my $body = FixMyStreet::DB->resultset('Body')->search({ name => 'Highways England' })->first;
+    my $body = FixMyStreet::DB->resultset('Body')->search({ name => 'National Highways' })->first;
     return $body;
 }
 
 # Copying of functions from UKCouncils that are needed here also - factor out to a role of some sort?
-sub cut_off_date { '' }
+sub cut_off_date { '2020-11-09' }
 sub problems_restriction { FixMyStreet::Cobrand::UKCouncils::problems_restriction($_[0], $_[1]) }
 sub problems_on_map_restriction { $_[0]->problems_restriction($_[1]) }
 sub problems_sql_restriction { FixMyStreet::Cobrand::UKCouncils::problems_sql_restriction($_[0], $_[1]) }
 sub users_restriction { FixMyStreet::Cobrand::UKCouncils::users_restriction($_[0], $_[1]) }
 sub updates_restriction { FixMyStreet::Cobrand::UKCouncils::updates_restriction($_[0], $_[1]) }
 sub base_url { FixMyStreet::Cobrand::UKCouncils::base_url($_[0]) }
+sub contact_name { FixMyStreet::Cobrand::UKCouncils::contact_name($_[0]) }
+sub contact_email { FixMyStreet::Cobrand::UKCouncils::contact_email($_[0]) }
 
 sub munge_problem_list {
     my ($self, $problem) = @_;
@@ -42,7 +46,7 @@ sub admin_allow_user {
     my ( $self, $user ) = @_;
     return 1 if $user->is_superuser;
     return undef unless defined $user->from_body;
-    return $user->from_body->name eq 'Highways England';
+    return $user->from_body->name eq 'National Highways';
 }
 
 sub report_form_extras {
@@ -86,12 +90,14 @@ sub allow_photo_upload { 0 }
 
 sub allow_anonymous_reports { 'button' }
 
-sub admin_user_domain { 'highwaysengland.co.uk' }
+sub admin_user_domain { ( 'highwaysengland.co.uk', 'nationalhighways.co.uk' ) }
+
+sub abuse_reports_only { 1 }
 
 sub anonymous_account {
     my $self = shift;
     return {
-        email => $self->feature('anonymous_account') . '@' . $self->admin_user_domain,
+        email => $self->feature('anonymous_account') . '@' . 'highwaysengland.co.uk',
         name => 'Anonymous user',
     };
 }
@@ -141,7 +147,15 @@ sub fetch_area_children {
 sub munge_report_new_bodies {
     my ($self, $bodies) = @_;
     # On the cobrand there is only the HE body
-    %$bodies = map { $_->id => $_ } grep { $_->name eq 'Highways England' } values %$bodies;
+    %$bodies = map { $_->id => $_ } grep { $_->name eq 'National Highways' } values %$bodies;
+}
+
+# Want to remove the group our categories are all in
+sub munge_report_new_contacts {
+    my ($self, $contacts) = @_;
+    foreach (@$contacts) {
+        $_->unset_extra_metadata("group");
+    }
 }
 
 sub report_new_is_on_he_road {
@@ -162,6 +176,51 @@ sub report_new_is_on_he_road {
     my $ukc = FixMyStreet::Cobrand::UKCouncils->new;
     my $features = $ukc->_fetch_features($cfg, $x, $y);
     return scalar @$features ? 1 : 0;
+}
+
+sub dashboard_export_problems_add_columns {
+    my ($self, $csv) = @_;
+
+    $csv->modify_csv_header( Ward => 'Council' );
+
+    $csv->objects_attrs({
+        '+columns' => ['comments.text', 'comments.extra', 'user.name'],
+        join => { comments => 'user' },
+    });
+
+    $csv->add_csv_columns(
+        area_name => 'Area name',
+        where_hear => 'How you found us',
+    );
+    for (my $i=1; $i<=5; $i++) {
+        $csv->add_csv_columns(
+            "update_text_$i" => "Update $i",
+            "update_date_$i" => "Update $i date",
+            "update_name_$i" => "Update $i name",
+        );
+    }
+
+    $csv->csv_extra_data(sub {
+        my $report = shift;
+
+        my $fields = {
+            area_name => $report->get_extra_field_value('area_name'),
+            where_hear => $report->get_extra_metadata('where_hear'),
+        };
+
+        my $i = 1;
+        for my $update ($report->comments->search(undef, { order_by => ['confirmed', 'id'] })) {
+            next unless $update->state eq 'confirmed';
+            last if $i > 5;
+            $fields->{"update_text_$i"} = $update->text;
+            $fields->{"update_date_$i"} = $update->confirmed;
+            my $staff = $update->get_extra_metadata('contributed_by') || $update->get_extra_metadata('is_body_user') || $update->get_extra_metadata('is_superuser');
+            $fields->{"update_name_$i"} = $staff ? $update->user->name : 'public';
+            $i++;
+        }
+
+        return $fields;
+    });
 }
 
 1;

@@ -61,7 +61,8 @@ sub email_list : Path('/_dev/email') : Args(0) {
     my %with_problem = ('alert-update' => 1, 'other-reported' => 1,
         'problem-confirm' => 1, 'problem-confirm-not-sending' => 1,
         'confirm_report_sent' => 1,
-        'problem-moderated' => 1, 'questionnaire' => 1, 'submit' => 1);
+        'problem-moderated' => 1, 'questionnaire' => 1, 'submit' => 1,
+        'alert-subscribed' => 1);
 
     my $update = $c->model('DB::Comment')->search(undef, { rows => 1 } )->first;
     my $problem = $c->model('DB::Problem')->search(undef, { rows => 1 } )->first;
@@ -87,7 +88,7 @@ query parameter, and other data is taken from the database.
 sub email_previewer : Path('/_dev/email') : Args(1) {
     my ( $self, $c, $template ) = @_;
 
-    my $vars = {};
+    my $vars = { to => $c->user->email };
     if (my $id = $c->get_param('update')) {
         $vars->{update} = $c->model('DB::Comment')->find($id);
         $vars->{problem} = $vars->{report} = $vars->{update}->problem;
@@ -102,7 +103,12 @@ sub email_previewer : Path('/_dev/email') : Args(1) {
         $vars->{data} = [ $c->model('DB::Problem')->search({}, { rows => 5 })->all ];
     } elsif ($template eq 'alert-update') {
         $vars->{data} = [];
-        my $q = $c->model('DB::Comment')->search({}, { rows => 5 });
+        my $q;
+        if ($vars->{problem}->comment_count > 0) {
+            $q = $vars->{problem}->comments;
+        } else {
+            $q = $c->model('DB::Comment')->search({}, { rows => 5 });
+        }
         while (my $u = $q->next) {
             my $fn = sub {
                 return FixMyStreet::App::Model::PhotoSet->new({

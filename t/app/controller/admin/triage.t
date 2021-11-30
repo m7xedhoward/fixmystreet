@@ -71,6 +71,28 @@ FixMyStreet::override_config {
         $mech->content_contains('CONFIRM Subject');
     };
 
+    subtest "user has to select a category" => sub {
+        my $report_url = '/report/' . $report->id;
+        $mech->get_ok($report_url);
+        $mech->content_contains('Traffic lights');
+
+        $mech->submit_form_ok( {
+                with_fields => {
+                    category => '',
+                    include_update => 0,
+                }
+            },
+            'triage form submitted'
+        );
+
+        $mech->content_contains('Please choose a category', "displays error message if no category selected");
+
+        $report->discard_changes;
+        is $report->category, 'Potholes', 'category still unchanged';
+        is $report->state, 'for triage', 'report still in triage state';
+        ok $report->whensent, 'report not marked to resend';
+    };
+
     subtest "changing report category marks report as confirmed" => sub {
         my $report_url = '/report/' . $report->id;
         $mech->get_ok($report_url);
@@ -118,7 +140,7 @@ FixMyStreet::override_config {
         $mech->content_lacks('Report triaged from Potholes to Traffic lights');
 
         $mech->clear_emails_ok;
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         $mech->email_count_is(0);
     };
 };

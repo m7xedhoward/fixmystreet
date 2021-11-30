@@ -30,6 +30,8 @@ sub enter_postcode_text {
     return 'Enter a ' . $self->council_area . ' postcode, or street name';
 }
 
+sub front_stats_show_middle { 'none' }
+
 sub send_questionnaires { 0 }
 
 sub suppress_reporter_alerts { 1 }
@@ -151,7 +153,10 @@ sub categories_restriction {
     # on /report/new before a category is selected...
     return $rs->search( {
             'body.name' => 'Westminster City Council',
-            'me.send_method' => undef,
+            -or => [
+                'me.send_method' => undef, # Open311 categories
+                'me.send_method' => '', # Open311 categories that have been edited in the admin
+            ]
         }, { join => 'body' });
 }
 

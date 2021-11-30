@@ -24,9 +24,9 @@ using the email address associated with the report.</p>
 [% END %]
 
 <p style="[% p_style %]">
-Due to the current COVID 19 crisis and associated restrictions regrettably we
-must prioritise more urgent work, therefore we hope you will understand that
-there may be a delay in fixing the defect.
+Due to COVID 19 restrictions we have reduced capacity and must prioritise work
+based on urgency. We apologise that it might therefore take longer than normal
+to respond to your report.
 </p>
 
   <p style="margin: 20px auto; text-align: center">
@@ -36,7 +36,7 @@ there may be a delay in fixing the defect.
 </th>
 [% WRAPPER '_email_sidebar.html' object = report %]
     <h2 style="[% h2_style %]">[% report.title | html %]</h2>
-    <p style="[% secondary_p_style %]">[% report.detail | html %]</p>
+    [% report.detail | html_para_email(secondary_p_style) %]
 [% END %]
 
 [% INCLUDE '_email_bottom.html' %]

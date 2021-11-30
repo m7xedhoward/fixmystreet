@@ -186,7 +186,13 @@ sub ward : Path : Args(2) {
 sub setup_categories :Private {
     my ($self, $c) = @_;
 
-    my @categories = $c->stash->{body}->contacts->not_deleted->search( undef, {
+    my $rs = $c->stash->{body}->contacts;
+    if ($c->user_exists && ($c->user->is_superuser || ($c->user->from_body && $c->user->from_body->id == $c->stash->{body}->id))) {
+        $rs = $rs->not_deleted_admin;
+    } else {
+        $rs = $rs->not_deleted;
+    }
+    my @categories = $rs->search( undef, {
         columns => [ 'id', 'category', 'extra', 'body_id', 'send_method' ],
         distinct => 1,
     } )->all_sorted;
@@ -197,7 +203,7 @@ sub setup_categories :Private {
 
     $c->stash->{filter_categories} = \@categories;
     $c->stash->{filter_category} = { map { $_ => 1 } $c->get_param_list('filter_category', 1) };
-    $c->forward('/report/stash_category_groups', [ \@categories ]) if $c->cobrand->enable_category_groups;
+    $c->forward('/report/stash_category_groups', [ \@categories ]);
 }
 
 sub setup_map :Private {
@@ -587,6 +593,9 @@ sub load_and_group_problems : Private {
             add_row( $c, $problem, $_, \%problems, \@pins );
         }
     }
+
+    my $extra_pins = $c->cobrand->call_hook('extra_reports_pins');
+    @pins = (@pins, @$extra_pins) if $extra_pins;
 
     $c->stash(
         problems      => \%problems,

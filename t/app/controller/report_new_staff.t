@@ -143,7 +143,7 @@ subtest "check map click ajax response for inspector" => sub {
         ALLOWED_COBRANDS => 'fixmystreet',
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
-        $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=55.952055&longitude=-3.189579' );
+        $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=55.952055&longitude=-3.189579&w=1' );
     };
     like $extra_details->{category}, qr/data-prefill="0/, 'inspector prefill not set';
     ok !$extra_details->{contribute_as}, 'no contribute as section';
@@ -167,7 +167,7 @@ subtest "check map click ajax response for inspector and uk cobrand" => sub {
         ALLOWED_COBRANDS => 'bromley',
         MAPIT_URL => 'http://mapit.uk/',
     }, sub {
-        $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=51.402096&longitude=0.015784' );
+        $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=51.402096&longitude=0.015784&w=1' );
     };
     like $extra_details->{category}, qr/data-prefill="0/, 'inspector prefill not set';
 };
@@ -248,14 +248,25 @@ subtest 'staff-only categories when reporting' => sub {
         $mech->get_ok('/admin/templates/' . $body_ids{2651} . '/new');
         $mech->content_contains('Trees');
 
+        $mech->get_ok('/reports/City+of+Edinburgh');
+        $mech->content_contains('<option value="Trees">', 'Superuser can see staff only category in dropdown');
+
         my $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=55.952055&longitude=-3.189579' );
         is_deeply [ sort keys %{$extra_details->{by_category}} ], [ 'Street lighting', 'Trees' ], 'Superuser can see staff-only category';
 
         $inspector->update({ is_superuser => 0 });
+
+        $mech->get_ok('/reports/City+of+Edinburgh');
+        $mech->content_contains('<option value="Trees">', 'Body staff can see staff-only category in dropdown');
+
         $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=55.952055&longitude=-3.189579' );
         is_deeply [ sort keys %{$extra_details->{by_category}} ], [ 'Street lighting', 'Trees' ], 'Body staff user can see staff-only category';
 
         $inspector->update({ from_body => $body_ids{2482} });
+
+        $mech->get_ok('/reports/City+of+Edinburgh');
+        $mech->content_lacks('<option value="Trees">', 'Different body staff cannot see staff-only category in dropdown');
+
         $extra_details = $mech->get_ok_json( '/report/new/ajax?latitude=55.952055&longitude=-3.189579' );
         is_deeply [ sort keys %{$extra_details->{by_category}} ], [ 'Street lighting' ], 'Different body staff user cannot see staff-only category';
 

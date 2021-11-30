@@ -153,23 +153,11 @@ sub categories_restriction {
     # send_method set to 'Email::BathNES' (to use a custom template) which must
     # be show on the cobrand.
     return $rs->search( { -or => [
-        'me.send_method' => undef, # Open311 categories, or Highways England
+        'me.send_method' => undef, # Open311 categories, or National Highways
         'me.send_method' => '', # Open311 categories that have been edited in the admin
         'me.send_method' => 'Email::BathNES', # Street Light Fault
         'me.send_method' => 'Blackhole', # Parks categories
     ] } );
-}
-
-# Do a manual prefetch of all staff users for contributed_by lookup
-sub _dashboard_user_lookup {
-    my $self = shift;
-
-    my @user_ids = FixMyStreet::DB->resultset('User')->search(
-        { from_body => { '!=' => undef } },
-        { columns => [ 'id', 'email' ] })->all;
-
-    my %user_lookup = map { $_->id => $_->email } @user_ids;
-    return \%user_lookup;
 }
 
 sub dashboard_export_updates_add_columns {
@@ -186,15 +174,12 @@ sub dashboard_export_updates_add_columns {
         '+columns' => ['user.email'],
         join => 'user',
     });
-    my $user_lookup = $self->_dashboard_user_lookup;
+    my $user_lookup = $self->csv_staff_users;
 
     $csv->csv_extra_data(sub {
         my $report = shift;
 
-        my $staff_user = '';
-        if ( my $contributed_by = $report->get_extra_metadata('contributed_by') ) {
-            $staff_user = $user_lookup->{$contributed_by};
-        }
+        my $staff_user = $self->csv_staff_user_lookup($report->get_extra_metadata('contributed_by'), $user_lookup);
 
         return {
             user_email => $report->user->email || '',
@@ -219,15 +204,12 @@ sub dashboard_export_problems_add_columns {
         '+columns' => ['user.email', 'user.phone'],
         join => 'user',
     });
-    my $user_lookup = $self->_dashboard_user_lookup;
+    my $user_lookup = $self->csv_staff_users;
 
     $csv->csv_extra_data(sub {
         my $report = shift;
 
-        my $staff_user = '';
-        if ( my $contributed_by = $report->get_extra_metadata('contributed_by') ) {
-            $staff_user = $user_lookup->{$contributed_by};
-        }
+        my $staff_user = $self->csv_staff_user_lookup($report->get_extra_metadata('contributed_by'), $user_lookup);
         my $attribute_data = join "; ", map { $_->{name} . " = " . $_->{value} } @{ $report->get_extra_fields };
         return {
             user_email => $report->user->email || '',
@@ -236,6 +218,15 @@ sub dashboard_export_problems_add_columns {
             attribute_data => $attribute_data,
         };
     });
+}
+
+sub post_report_report_problem_link {
+    return {
+        uri => '/',
+        label => 'Report a problem',
+        attrs => 'class="report-a-problem-btn"',
+    };
+
 }
 
 1;

@@ -1,8 +1,8 @@
 package FixMyStreet::Cobrand::FixMyStreet;
 use base 'FixMyStreet::Cobrand::UK';
 
-use strict;
-use warnings;
+use Moo;
+with 'FixMyStreet::Roles::BoroughEmails';
 
 use constant COUNCIL_ID_BROMLEY => 2482;
 use constant COUNCIL_ID_ISLEOFWIGHT => 2636;
@@ -69,6 +69,12 @@ sub munge_around_category_where {
     if ($bromley) {
         $where->{extra} = [ undef, { -not_like => '%Waste%' } ];
     }
+
+    my $pboro = grep { $_->name eq 'Peterborough City Council' } @{ $self->{c}->stash->{around_bodies} };
+    if ($pboro) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_around_category_where($where);
+    }
 }
 
 sub _iow_category_munge {
@@ -93,6 +99,11 @@ sub munge_reports_category_list {
     if ( $bodies{'Bromley Council'} ) {
         @$categories = grep { grep { $_ ne 'Waste' } @{$_->groups} } @$categories;
     }
+
+    if ( $bodies{'Peterborough City Council'} ) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_reports_category_list($categories);
+    }
 }
 
 sub munge_reports_area_list {
@@ -114,13 +125,13 @@ sub munge_report_new_bodies {
         $tfl->munge_surrounding_london($bodies);
     }
 
-    if ( $bodies{'Highways England'} ) {
+    if ( $bodies{'National Highways'} ) {
         my $c = $self->{c};
         my $he = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $c });
         my $on_he_road = $c->stash->{on_he_road} = $he->report_new_is_on_he_road;
 
         if (!$on_he_road) {
-            %$bodies = map { $_->id => $_ } grep { $_->name ne 'Highways England' } values %$bodies;
+            %$bodies = map { $_->id => $_ } grep { $_->name ne 'National Highways' } values %$bodies;
         }
     }
 }
@@ -136,10 +147,17 @@ sub munge_report_new_contacts {
     if ( $bodies{'Bromley Council'} ) {
         @$contacts = grep { grep { $_ ne 'Waste' } @{$_->groups} } @$contacts;
     }
+    if ( $bodies{'Hackney Council'} ) {
+        @$contacts = grep { $_->category ne 'Noise report' } @$contacts;
+    }
     if ( $bodies{'TfL'} ) {
         # Presented categories vary if we're on/off a red route
         my $tfl = FixMyStreet::Cobrand->get_class_for_moniker( 'tfl' )->new({ c => $self->{c} });
         $tfl->munge_red_route_categories($contacts);
+    }
+    if ( $bodies{'Peterborough City Council'} ) {
+        my $pboro = FixMyStreet::Cobrand::Peterborough->new({ c => $self->{c} });
+        $pboro->munge_report_new_contacts($contacts);
     }
 
 }
@@ -318,6 +336,16 @@ sub updates_disallowed {
     return $self->next::method(@_);
 }
 
+sub body_disallows_state_change {
+    my $self = shift;
+    my ($problem) = @_;
+    my $c = $self->{c};
+
+    my ($disallowed, $body) = $self->per_body_config('update_states_disallowed', $problem);
+    $disallowed //= 0;
+    return $disallowed;
+}
+
 sub problem_state_processed {
     my ($self, $comment) = @_;
 
@@ -343,7 +371,7 @@ sub suppress_reporter_alerts {
 
 sub must_have_2fa {
     my ($self, $user) = @_;
-    return 1 if $user->is_superuser;
+    return 1 if $user->is_superuser && !FixMyStreet->staging_flag('skip_must_have_2fa');
     return 1 if $user->from_body && $user->from_body->name eq 'TfL';
     return 0;
 }
@@ -357,6 +385,7 @@ sub send_questionnaire {
 sub update_email_shortlisted_user {
     my ($self, $update) = @_;
     FixMyStreet::Cobrand::TfL::update_email_shortlisted_user($self, $update);
+    FixMyStreet::Cobrand::Hackney::update_email_shortlisted_user($self, $update);
 }
 
 sub manifest {
@@ -376,5 +405,28 @@ sub report_new_munge_before_insert {
 
     FixMyStreet::Cobrand::Buckinghamshire::report_new_munge_before_insert($self, $report);
 }
+
+around 'munge_sendreport_params' => sub {
+    my ($orig, $self, $row, $h, $params) = @_;
+
+    my $to = $params->{To}->[0]->[0];
+    if ($to !~ /northamptonshire$/) {
+        return $self->$orig($row, $h, $params);
+    }
+
+    # The district areas won't exist in MapIt at some point, so look up what
+    # district this report would have been in and temporarily override the
+    # areas column so BoroughEmails::munge_sendreport_params can do its thing.
+    my ($lat, $lon) = ($row->latitude, $row->longitude);
+    my $district = FixMyStreet::MapIt::call( 'point', "4326/$lon,$lat", type => 'DIS', generation => 36 );
+    ($district) = keys %$district;
+
+    my $original_areas = $row->areas;
+    $row->areas(",$district,");
+
+    $self->$orig($row, $h, $params);
+
+    $row->areas($original_areas);
+};
 
 1;

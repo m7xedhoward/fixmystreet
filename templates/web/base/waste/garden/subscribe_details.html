@@ -1,0 +1,64 @@
+[% extra_js = [
+    version('/js/waste.js')
+] ~%]
+[% INCLUDE 'waste/header.html' %]
+
+[% PROCESS 'govuk/fields.html' %]
+[% PROCESS title title=form.title %]
+[% PROCESS errors %]
+
+<div class="waste-service-hint-banner">
+  <div class="waste-service-hint-banner__image">
+      <img src="/cobrands/bromley/images/container-images/garden-waste-bin.png" alt="">
+  </div>
+  <div class="waste-service-hint__content">
+      <p>
+        Each wheelie bin holds the equivalent of 5 or 6 bags of green garden waste,
+        and will be collected fortnightly during gardening season (March–November)
+        and monthly outside of gardening season (December–February).
+      </p>
+  </div>
+</div>
+
+<form method="post" id="subscribe_details">
+  <fieldset class="govuk-fieldset" style="margin-top: 1.5em;">
+    [% INCLUDE waste/garden/_bin_quantities.html %]
+    <hr class="fieldset-hr">
+
+    <div class="cost-pa__total">
+      <span class="cost-pa__total-costs">
+          Total per year: £<span id="cost_pa">[% tprintf( '%.2f', payment ) %]</span>
+      </span>
+      <span class="cost-pa__total-costs">
+          Total to pay now: £<span id="cost_now">[% tprintf( '%.2f', payment ) %]</span>
+      </span>
+    </div>
+  </fieldset>
+
+  [% IF NOT staff_payments_allowed %]
+  [% PROCESS form override_fields=['payment_method'] %]
+  [% END %]
+
+  [% IF property %]
+  <dl class="waste__address">
+    <dt class="waste__address__title"><h2 class="govuk-fieldset__heading">Collection address</h2></dt>
+    <dd class="waste__address__property">[% property.address %]</dd>
+  </dl>
+  [% END %]
+
+  [% IF NOT staff_payments_allowed %]
+  [% PROCESS form override_fields=['billing_differ', 'billing_address'] %]
+  [% END %]
+
+  [% IF staff_payments_allowed %]
+  [% PROCESS form override_fields=['name', 'email', 'phone', 'continue_review' ] %]
+  [% ELSE %]
+  [% PROCESS form override_fields=['name', 'email', 'phone', 'password', 'continue_review' ] %]
+  [% END %]
+
+  [% PROCESS form override_fields=['saved_data', 'token', 'process', 'service_id'] %]
+
+  <input type="hidden" name="per_bin_cost" id="per_bin_cost" value="[% per_bin_cost %]">
+</form>
+
+[% INCLUDE footer.html %]

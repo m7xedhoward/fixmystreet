@@ -40,7 +40,6 @@ fixmystreet.password_minimum_length = [% c.cobrand.password_minimum_length %];
         first_name: '[% loc('Please enter your first name', "JS") %]',
         last_name: '[% loc('Please enter your second name', "JS") %]',
         right_place: '[% loc('Reposition if needed, then hit Continue', "JS") %]',
-        try_again: '[% loc('Try again', "JS") %]',
         place_pin_on_map: '[% loc('Place pin on map', "JS") %]',
         back: '[% loc('Back', "JS") %]',
         how_to_send: '[% loc('How to send successful reports', "JS") %]',
@@ -60,12 +59,9 @@ fixmystreet.password_minimum_length = [% c.cobrand.password_minimum_length %];
 
         reporting_a_problem: '[% loc('Reporting a problem', "JS") %]',
         ok: '[% loc('Continue', "JS") %]',
-        map: '[% loc('MAP', "JS") %]',
 
-        map_map: '[% loc('Map', "JS") %]',
-        map_satellite: '[% loc('Satellite', "JS") %]',
-        map_aerial: '[% loc('Aerial', "JS") %]',
-        map_roads: '[% loc('Roads', "JS") %]',
+        map_aerial: '[% loc('Aerial map', "JS") %]',
+        map_roads: '[% loc('Road map', "JS") %]',
 
         expand_map: '[% loc('Expand map', "JS") %]',
         collapse_map: '[% loc('Collapse map', "JS") %]',
@@ -81,11 +77,16 @@ fixmystreet.password_minimum_length = [% c.cobrand.password_minimum_length %];
         upload_cancel_confirmation: '[% loc('Are you sure you want to cancel this upload?', "JS") %]',
         upload_invalid_file_type: '[% loc('Please upload an image only', "JS") %]',
 
-        [% IF c.config.SMS_AUTHENTICATION ~%]
+        [% IF c.cobrand.sms_authentication ~%]
         login_with_email: '[% loc('Log in with email/text', "JS") %]',
         [% ELSE ~%]
         login_with_email: '[% loc('Log in with email', "JS") %]',
         [% END ~%]
+
+        redaction_link: '[% loc('Redact', "JS") %]',
+        redaction_help: '[% loc('Draw rectangles on the picture then click Done.', "JS") %]',
+        redaction_done: '[% loc('Done', "JS") %]',
+        redaction_undo: '[% loc('Undo last', "JS") %]',
 
         report_a_problem_btn: {
             default: '[% loc('Report a problem', "JS") %]',

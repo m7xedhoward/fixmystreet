@@ -178,12 +178,8 @@ sub updates_as_hashref {
     if ($self->problem_has_public_response($problem)) {
         $hashref->{update_pp} = $self->prettify_dt( $problem->lastupdate );
 
-        if ( $problem->state ne 'external' ) {
-            $hashref->{details} = FixMyStreet::Template::add_links(
-                $problem->get_extra_metadata('public_response') || '' );
-        } else {
-            $hashref->{details} = sprintf( _('Assigned to %s'), $problem->body->name );
-        }
+        $hashref->{details} = FixMyStreet::Template::add_links(
+            $problem->get_extra_metadata('public_response') || '' );
     }
 
     return $hashref;
@@ -247,7 +243,17 @@ my @public_holidays = (
     '2021-01-01', '2021-04-02', '2021-04-05',
     '2021-04-19', '2021-05-13', '2021-05-24',
     '2021-09-13',
+    '2021-05-12', '2021-05-14', '2021-12-27', '2021-12-28', '2021-12-29', '2021-12-30', '2021-12-31',
+
+    '2022-04-15', '2022-04-18',
+    '2022-04-25', '2022-05-26', '2022-06-06',
+    '2022-08-01', '2022-09-12', '2022-12-26',
+    '2022-05-27', '2022-12-27', '2022-12-28', '2022-12-29', '2022-12-30',
 );
+
+sub working_days {
+    return FixMyStreet::WorkingDays->new( public_holidays => \@public_holidays );
+}
 
 sub overdue {
     my ( $self, $problem ) = @_;
@@ -255,7 +261,7 @@ sub overdue {
     my $w = $problem->created;
     return 0 unless $w;
 
-    my $wd = FixMyStreet::WorkingDays->new( public_holidays => \@public_holidays );
+    my $wd = $self->working_days;
 
     # call with previous state
     if ( $problem->state eq 'submitted' ) {
@@ -308,6 +314,7 @@ sub report_page_data {
     })->all_sorted;
     $c->stash->{filter_categories} = \@categories;
     $c->stash->{filter_category} = { map { $_ => 1 } $c->get_param_list('filter_category', 1) };
+    $c->forward('/report/stash_category_groups', [ \@categories ]);
 
     my $pins = $c->stash->{pins};
     FixMyStreet::Map::display_map(
@@ -1057,9 +1064,14 @@ Send an email to the B<user> who logged the problem, if their email address is c
 
 sub _admin_send_email {
     my ( $c, $template, $problem ) = @_;
-
-    return unless $problem->get_extra_metadata('email_confirmed');
     return if $problem->non_public;
+
+    unless ( $problem->get_extra_metadata('email_confirmed') ) {
+        # Make a note of what email was going to be sent, so it can be sent
+        # when the report is confirmed.
+        $problem->set_extra_metadata(admin_send_email_template => $template);
+        return;
+    }
 
     my $to = $problem->name
         ? [ $problem->user->email, $problem->name ]
@@ -1262,7 +1274,7 @@ sub export_as_csv {
                     'title', 'detail',
                     'photo',
                     'whensent', 'lastupdate',
-                    'service',
+                    'service', 'non_public',
                     'extra',
                     { sum_time_spent => { sum => 'admin_log_entries.time_spent' } },
                     'name', 'user.id', 'user.email', 'user.phone', 'user.name',
@@ -1276,14 +1288,16 @@ sub export_as_csv {
             'External Body', 'Time Spent', 'Title', 'Detail',
             'Media URL', 'Interface Used', 'Council Response',
             'Strasse', 'Mast-Nr.', 'Haus-Nr.', 'Hydranten-Nr.',
+            'Interne meldung',
         ],
         csv_columns => [
-            'id', 'created', 'whensent',' lastupdate', 'local_coords_x',
+            'id', 'created', 'whensent', 'lastupdate', 'local_coords_x',
             'local_coords_y', 'category', 'state', 'closure_status',
             'user_id', 'user_email', 'user_phone', 'user_name',
             'body_name', 'sum_time_spent', 'title', 'detail',
             'media_url', 'service', 'public_response',
             'strasse', 'mast_nr',' haus_nr', 'hydranten_nr',
+            'interne_meldung',
         ],
         csv_extra_data => sub {
             my $report = shift;
@@ -1328,7 +1342,8 @@ sub export_as_csv {
                 strasse => $extras{'strasse'} || '',
                 mast_nr => $extras{'mast_nr'} || '',
                 haus_nr => $extras{'haus_nr'} || '',
-                hydranten_nr => $extras{'hydranten_nr'} || ''
+                hydranten_nr => $extras{'hydranten_nr'} || '',
+                interne_meldung => $report->non_public,
             };
         },
         filename => 'stats',

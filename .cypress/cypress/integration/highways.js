@@ -1,7 +1,6 @@
-describe('Highways England tests', function() {
+describe('National Highways tests', function() {
     it('report as defaults to body', function() {
         cy.server();
-        cy.fixture('highways.xml');
         cy.route('**/mapserver/highways*', 'fixture:highways.xml').as('highways-tilma');
         cy.route('**/report/new/ajax*', 'fixture:highways-ajax.json').as('report-ajax');
         cy.visit('/');
@@ -12,19 +11,26 @@ describe('Highways England tests', function() {
         cy.get('#map_box').click(240, 249);
         cy.wait('@report-ajax');
         cy.wait('@highways-tilma');
+
         cy.get('#highways').should('contain', 'M6');
-        cy.get('#js-councils_text').should('contain', 'Highways England');
-        cy.get('#single_body_only').should('have.value', 'Highways England');
-        cy.get('#form_category').should('contain', 'Sign issue');
+        cy.get('#js-councils_text').should('contain', 'National Highways');
+        cy.get('#single_body_only').should('have.value', 'National Highways');
+        cy.nextPageReporting();
+        cy.get('#subcategory_NationalHighways').should('be.visible');
+        cy.go('back');
+
         cy.get('#js-not-highways').click();
         cy.get('#js-councils_text').should('contain', 'Borsetshire');
         cy.get('#single_body_only').should('have.value', '');
-        cy.get('#form_category').should('contain', 'Abandoned vehicles');
+        cy.nextPageReporting();
+        cy.get('#form_category_fieldset').should('be.visible');
+        cy.get('#form_category_fieldset input[value="National Highways"]').should('not.be.visible');
+        cy.go('back');
+
         cy.get('#js-highways').click({ force: true });
-        cy.get('#js-councils_text').should('contain', 'Highways England');
-        cy.get('#single_body_only').should('have.value', 'Highways England');
-        cy.get('#form_category').should('contain', 'Sign issue');
-        cy.get('#category_group').select('Sign issue');
-        cy.get('#form_category').should('have.value', 'Sign issue');
+        cy.get('#js-councils_text').should('contain', 'National Highways');
+        cy.get('#single_body_only').should('have.value', 'National Highways');
+        cy.nextPageReporting();
+        cy.get('#subcategory_NationalHighways label').contains('Sign issue').click();
     });
 });

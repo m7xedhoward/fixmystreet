@@ -5,13 +5,13 @@ on: [push, pull_request]
 jobs:
   test:
     name: Test on perl ${{ matrix.perl_version }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
 
     strategy:
       fail-fast: false
       matrix:
         # stretch, buster, focal/bullseye, xenial, trusty
-        # bionic 5.26 is ubuntu-latest, in coverage run
+        # bionic 5.26 is ubuntu-18.04, in coverage run
         perl_version: [ 5.24.4, 5.28.3, 5.30.3, 5.22.4, 5.18.4 ]
 
     steps:
@@ -41,6 +41,7 @@ jobs:
 
     - name: Add packages
       run: |
+        sudo apt update
         sudo apt install -y gettext language-pack-en language-pack-de language-pack-sv libimage-magick-perl
         ~/perl5/perlbrew/bin/perlbrew exec vendor/bin/carton install --deployment
         commonlib/bin/gettext-makemo FixMyStreet

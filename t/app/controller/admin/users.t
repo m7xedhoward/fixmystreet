@@ -32,8 +32,16 @@ $user5->add_to_roles($occ_role);
 
 $mech->log_in_ok( $superuser->email );
 
+subtest 'add user to abuse list from edit user page' => sub {
+    $mech->get_ok( '/admin/users/' . $user->id );
+    $mech->content_lacks('User in abuse table');
+    $mech->click_ok('banuser');
+    my $abuse = FixMyStreet::DB->resultset('Abuse')->find( { email => $user->email } );
+    ok $abuse, 'record added to abuse table';
+};
+
+
 subtest 'search abuse' => sub {
-    my $abuse = FixMyStreet::DB->resultset('Abuse')->find_or_create( { email => $user->email } );
     $mech->get_ok( '/admin/users?search=example' );
     $mech->content_like(qr{test\@example.com.*</td>\s*<td>.*?</td>\s*<td>User in abuse table}s);
 };
@@ -311,6 +319,7 @@ my %default_perms = (
     "permissions[report_edit_priority]" => undef,
     "permissions[report_inspect]" => undef,
     "permissions[report_instruct]" => undef,
+    "permissions[assign_report_to_user]" => undef,
     "permissions[report_prefill]" => undef,
     "permissions[contribute_as_another_user]" => undef,
     "permissions[contribute_as_anonymous_user]" => undef,
@@ -324,6 +333,7 @@ my %default_perms = (
     "permissions[template_edit]" => undef,
     "permissions[responsepriority_edit]" => undef,
     "permissions[category_edit]" => undef,
+    "permissions[emergency_message_edit]" => undef,
 );
 
 # Start this section with user having no name
@@ -541,6 +551,27 @@ FixMyStreet::override_config {
         $mech->content_contains( 'Updated!' );
     };
 
+    subtest "Test edit user name with phone number unchanged who has verified landline" => sub {
+        my $existing_user = $mech->create_user_ok('existing@example.com', name => 'Existing User', phone => '01184960017', phone_verified => 1 );
+	$mech->get_ok( '/admin/users/' . $existing_user->id );
+	$mech->submit_form_ok( { with_fields => {
+            name => 'Existing E. User',
+        } } );
+	$mech->content_contains( 'Updated!' );
+    };
+
+    subtest "Test edit user change phone number who has verified landline" => sub {
+        my $existing_user = $mech->create_user_ok('existing@example.com', name => 'Existing User', phone => '01184960017', phone_verified => 1 );
+	$mech->get_ok( '/admin/users/' . $existing_user->id );
+	$mech->submit_form_ok( { with_fields => {
+            phone => '01184960018',
+	} } );
+	$mech->content_lacks( 'Updated!' );
+	$mech->content_contains( 'Please check your phone number is correct' );
+    };
+
+
+
     subtest "Test changing user to an existing one" => sub {
         my $existing_user = $mech->create_user_ok('existing@example.com', name => 'Existing User');
         $mech->create_problems_for_body(2, 2514, 'Title', { user => $existing_user });
@@ -676,7 +707,9 @@ subtest "Removing account from admin" => sub {
     $user->discard_changes;
     is $user->name, '', 'Name gone';
     is $user->password, '', 'Password gone';
-    is $user->email, 'removed-' . $user->id . '@example.org', 'Email gone'
+    is $user->email, 'removed-' . $user->id . '@example.org', 'Email gone';
+    $mech->get_ok( '/admin/report_edit/' . $user->problems->first->id );
+    $mech->content_contains("name='username' value=''>");
 };
 
 subtest "can view list of user's alerts" => sub {

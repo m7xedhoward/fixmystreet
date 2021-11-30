@@ -202,14 +202,12 @@ sub setup_page_data : Private {
     @categories = grep { !$seen{$_->category_display}++ } @categories;
     $c->stash->{filter_categories} = \@categories;
 
-    if ($c->cobrand->enable_category_groups) {
-        my @contacts = map { {
-            category => $_->category,
-            category_display => $_->category_display,
-            group => [''],
-        } } @categories;
-        $c->forward('/report/stash_category_groups', [ \@contacts ]);
-    }
+    my @contacts = map { {
+        category => $_->category,
+        category_display => $_->category_display,
+        group => [''],
+    } } @categories;
+    $c->forward('/report/stash_category_groups', [ \@contacts ]);
 
     my $pins = $c->stash->{pins};
     FixMyStreet::Map::display_map(
@@ -272,6 +270,41 @@ sub shortlist_multiple : Path('planned/change_multiple') {
     $c->res->body(encode_json({ outcome => 'add' }));
 }
 
+sub bulk_assign : Path('planned/bulk_assign') {
+    my ($self, $c) = @_;
+    $c->forward('/auth/check_csrf_token');
+
+    # check here
+    $c->detach('/page_error_403_access_denied', [])
+        unless  ($c->user->has_body_permission_to('assign_report_to_user'));
+
+    my @bulk_reports = $c->get_param_list('bulk-assign-reports');
+    my $assignee = $c->get_param('inspector');
+
+    if (@bulk_reports) {
+        if ($assignee eq 'unassigned') {
+            # take off shortlist
+            my @problems = $c->model('DB::Problem')->search({ id => { -in => [ @bulk_reports ]} });
+            foreach my $problem (@problems) {
+                $problem->user->remove_from_planned_reports($problem);
+            }
+        } else {
+            # add to shortlist
+            my $inspector = $c->model('DB::User')->find({ id => $assignee });
+            # ... if actually an inspector:
+            if ($inspector->has_body_permission_to('report_inspect')) {
+                foreach my $report (@bulk_reports) {
+                    $c->forward( '/report/load_problem_or_display_error', [ $report ] ); 
+                    $inspector->add_to_planned_reports($c->stash->{problem});
+                }
+            }
+        }
+    }
+
+    $c->stash->{body} = $c->user->from_body;
+    $c->detach('/reports/redirect_body');
+}
+
 sub by_shortlisted {
     my $a_order = $a->get_extra_metadata('order') || 0;
     my $b_order = $b->get_extra_metadata('order') || 0;
@@ -317,6 +350,26 @@ sub anonymize : Path('anonymize') {
         }
         $c->res->redirect($object->url);
     }
+}
+
+sub notify_preference : Local : Args(0) {
+    my ( $self, $c ) = @_;
+
+    unless ($c->req->method eq 'POST') {
+        return $c->res->redirect('/my');
+    }
+
+    $c->forward('/auth/check_csrf_token');
+
+    my $update_notify = $c->get_param('update_notify');
+    my $alert_notify = $c->get_param('alert_notify');
+
+    $c->user->set_extra_metadata(
+        update_notify => $update_notify,
+        alert_notify => $alert_notify,
+    );
+    $c->user->update;
+    $c->res->redirect('/my');
 }
 
 __PACKAGE__->meta->make_immutable;

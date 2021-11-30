@@ -42,8 +42,10 @@ body, button {
     color: #222;
     background-color: #fff
 }
-input[disabled] {
-    color: #888;
+:disabled {
+    color: #555;
+    background-color: #eee;
+    opacity: 1;
 }
 
 /*
@@ -60,8 +62,8 @@ input[disabled] {
    Links
    ========================================================================== */
 
-/* mySociety removal: link colours specified elsewhere */
-a:focus { outline: thin dotted; }
+/* mySociety: remove link colours specified elsewhere, add class */
+a:focus, .focussed { outline: thin dotted; }
 
 /* Improve readability when focused and hovered in all browsers: h5bp.com/h */
 a:hover, a:active { outline: 0; }

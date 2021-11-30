@@ -589,7 +589,6 @@ subtest "Assign feedback pending (via confirmed), don't confirm email, no email 
 
     $mech->get_ok( '/admin/report_edit/' . $report->id );
     $mech->content_contains( 'Unbestätigt' );
-    $report->discard_changes;
     $mech->form_with_fields( 'status_update' );
     $mech->submit_form_ok( { button => 'publish_response', with_fields => { status_update => 'FINAL UPDATE' } } );
 
@@ -599,6 +598,21 @@ subtest "Assign feedback pending (via confirmed), don't confirm email, no email 
     $mech->content_contains('FINAL UPDATE');
 
     $mech->email_count_is(0);
+    $report->discard_changes;
+    is $report->get_extra_metadata('admin_send_email_template'), 'problem-closed.txt', 'correct email marked for sending';
+};
+
+subtest "Confirming report sends admin email" => sub {
+    my $token = FixMyStreet::DB->resultset('Token')->create({ scope => 'problem', data => $report->id });
+    $mech->get_ok('/P/' . $token->token);
+    $report->discard_changes;
+    is $report->get_extra_metadata('admin_send_email_template'), undef, 'template no longer set';
+
+    $email = $mech->get_email;
+    like $email->header('To'), qr/test\@example.com/, 'to line looks correct';
+    like $email->header('From'), qr/do-not-reply\@example.org/, 'from line looks correct';
+    like $email->body, qr/FINAL UPDATE/, 'body looks correct';
+    $mech->clear_emails_ok;
 };
 
 # Report assigned to third party
@@ -925,11 +939,18 @@ subtest "test stats" => sub {
     # my @data = $mech->content =~ /(?:moderiert|abgeschlossen): \d+/g;
     # diag Dumper(\@data); use Data::Dumper;
 
+    $report->update({ non_public => 1 });
+
     my $export_count = get_export_rows_count($mech);
     if (defined $export_count) {
         is $export_count - $EXISTING_REPORT_COUNT, 3, 'Correct number of reports';
         $mech->content_contains('fixed - council');
     }
+
+    $mech->content_contains('Hydranten-Nr.,"Interne meldung"');
+    $mech->content_contains('"This is the public response to your report. Freundliche Gruesse.",,,,,1', "Internal report is marked as such");
+    $report->update({ non_public => 0 });
+
     $export_count =  get_export_rows_count($mech, '&ym=' . DateTime->now->strftime("%m.%Y"));
     is $export_count - $EXISTING_REPORT_COUNT, 3, 'Correct number of reports when filtering by month';
 };
@@ -1056,6 +1077,15 @@ subtest 'users at the top level can be edited' => sub {
 
 subtest 'A visit to /reports is okay' => sub {
     $mech->get_ok('/reports');
+    $mech->content_contains('<option value="Cat1">');
+};
+
+subtest 'CSV export includes lastupdate for problem' => sub {
+    $mech->get_ok( '/admin/stats?export=1' );
+    is $mech->res->code, 200, 'csv retrieved ok';
+    my @rows = $mech->content_as_csv;
+    is $rows[0]->[3], 'Last Updated', "Last Updated field has correct column heading";
+    isnt $rows[1]->[3], '', "Last Updated field isn't blank";
 };
 
 };

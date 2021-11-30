@@ -1,3 +1,14 @@
+/* COLOURS */
+
+$base_bg: #eeeeee;
+$govuk-brand-colour: #1d70b8;
+$govuk-error-colour: #d4351c;
+
+/* BREAKPOINTS */
+
+$medium-screen: 30em !default;
+$large-screen: 56.888888889em !default;
+
 body.waste {
     label, legend {
       margin-top: 0; font-weight: normal !important;
@@ -11,7 +22,7 @@ body.waste {
       max-width: 9ex;
     }
 
-    input[type="text"].govuk-input {
+    input[type="text"].govuk-input, input[type="password"].govuk-input, input[type="email"].govuk-input {
       font-size: 16px;
       font-size: 1rem;
       line-height: 1.25;
@@ -19,6 +30,17 @@ body.waste {
       @media (min-width: 40.0625em) {
         font-size: 19px; font-size: 1.1875rem; line-height: 1.31579;
       }
+    }
+    textarea.govuk-textarea {
+      font-family: $body-font;
+    }
+
+    input#phone, input#password, input#bin_number {
+      max-width: 28ex;
+    }
+
+    .govuk-form-group.loading {
+        background: url("/cobrands/fixmystreet/images/spinner-white.gif") flip(0%,100%) 100% no-repeat;
     }
 }
 
@@ -112,6 +134,20 @@ body.waste {
     transition: all 200ms ease-in;
     position: absolute;
   }
+
+  .renewal-status {
+    color: $govuk-error-colour;
+    font-weight: bold;
+    &::before {
+      content: "";
+      display: inline-block;
+      background: $govuk-error-colour;
+      height: .8em;
+      width: .8em;
+      border-radius: 100%;
+      margin-right: .5em;
+    }
+  }
 }
 
 .waste-service-name.govuk-heading-m {
@@ -162,4 +198,184 @@ input[type="submit"].waste-service-link {
 
 .text-centered {
   text-align: center;
+}
+
+.waste-service-hint-banner {
+  display: flex;
+  max-width: 48em;
+  background-color: $base_bg;
+  padding: 1em;
+  justify-items: center;
+  align-items: center;
+  border-radius: 3px;
+
+  &__image {
+    align-items: center;
+    margin-right: 1em;
+    flex: 0 0 80px;
+  }
+
+  &__content {
+    align-self: center;
+    p {
+      margin: 0;
+    }
+  }
+}
+
+#current_bins, #new_bins {
+  max-width: 4em; //input widths for subscribe_details page
+}
+
+.fieldset-hr {
+  max-width: 50em;
+}
+
+.fieldset-container {
+  max-width: 50em;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 2em 0;
+  .fieldset-item {
+    &:nth-child(1) {
+      flex: 1 1 50%;
+      min-width: 22ch;
+    }
+    &:nth-child(2) {
+      flex: 1 1 10%;
+    }
+    &:nth-child(3) {
+      flex: 1 1 40%;
+      text-align: left;
+    }
+
+    label {
+      font-weight: 700 !important;
+      padding-right: 10px;
+    }
+  }
+
+  @media (min-width: $medium-screen) {
+    .fieldset-item {
+      &:nth-child(3) {
+        text-align: right;
+      }
+    }
+  }
+}
+
+.cost-pa__total {
+  max-width: 50em;
+  text-align: right;
+  margin-top: 1em;
+  &-costs {
+    display: block;
+    &:nth-child(2) {
+      margin: 1em 0 3em 0;
+      font-weight: 700;
+    }
+  }
+}
+
+#payment_method-item-hint, #password-hint {
+  max-width: 36em;
+}
+
+.govuk-warning-text {
+  display: flex;
+  padding: 1.5em;
+  flex-direction: column;
+
+  &__img {
+    flex-basis: auto;
+    align-self: center;
+    
+    .govuk-warning-text__icon {
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      font-weight: 700;
+      -webkit-box-sizing: border-box;
+      box-sizing: border-box;
+      display: inline-block;
+      min-width: 35px;
+      min-height: 35px;
+      border-radius: 50%;
+      color: #fff;
+      font-size: 30px;
+      line-height: 29px;
+      text-align: center;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      user-select: none;
+      forced-color-adjust: none;
+    }
+  }
+
+  &__content {
+    padding-top: 1em;
+    text-align: center;
+
+    .govuk-warning-text__assistive {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+      clip: rect(0 0 0 0) !important;
+      -webkit-clip-path: inset(50%) !important;
+      clip-path: inset(50%) !important;
+      border: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    h3 {
+      margin-bottom: .5em;
+    }
+    .govuk-warning-text__heading {
+      color: #222 !important;
+    }
+    .govuk-button {
+      margin: 1.2em 0 0 0;
+    }
+  }
+
+  @media (min-width: $large-screen) {
+    flex-direction: row;
+
+    &__img {
+      flex-basis: 15%;
+      align-self: auto;
+    }
+
+    &__content {
+      text-align: left;
+      padding-top: 0;
+    }
+  }
+}
+
+.due {
+  background: $base_bg;
+  margin-bottom: 1em;
+
+  .govuk-warning-text__img {
+    .govuk-warning-text__icon {
+      border: 3px solid $govuk-brand-colour;
+      background: $govuk-brand-colour;
+    }
+  }
+}
+
+.overdue {
+  background: lighten($govuk-error-colour, 44%);
+
+  .govuk-warning-text__img {
+    .govuk-warning-text__icon {
+      border: 3px solid $govuk-error-colour;
+      background: $govuk-error-colour;
+    }
+  }
 }

@@ -39,6 +39,12 @@ sub disambiguate_location {
     };
 }
 
+sub map_type {
+    my $self = shift;
+    return 'OS::FMS' if $self->feature('os_maps_url') || $self->feature('os_maps_api_key');
+    return $self->next::method();
+}
+
 sub process_open311_extras {
     my $self    = shift;
     my $ctx     = shift;
@@ -368,11 +374,11 @@ sub get_body_handler_for_problem {
     if ($row->to_body_named('TfL')) {
         return FixMyStreet::Cobrand::TfL->new;
     }
-    # Do not do anything for Highways England here, as we don't want it to
+    # Do not do anything for National Highways here, as we don't want it to
     # treat this as a cobrand for e.g. submit report emails made on .com
 
     my @bodies = values %{$row->bodies};
-    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|Highways England/ } @bodies;
+    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|National Highways/ } @bodies;
 
     my $cobrand = FixMyStreet::Cobrand->body_handler(\%areas);
     return $cobrand if $cobrand;
@@ -475,14 +481,16 @@ sub _get_bank_holiday_json {
     my $file = 'bank-holidays.json';
     my $cache_file = path(FixMyStreet->path_to("../data/$file"));
     my $js;
-    if (-s $cache_file && -M $cache_file <= 7 && !FixMyStreet->config('STAGING_SITE')) {
+    # uncoverable branch true
+    if (-s $cache_file && -M $cache_file <= 7 && !FixMyStreet->test_mode) {
         # uncoverable statement
         $js = $cache_file->slurp_utf8;
     } else {
         $js = _fetch_url("https://www.gov.uk/$file");
         # uncoverable branch false
         $js = decode_utf8($js) if !utf8::is_utf8($js);
-        if ($js && !FixMyStreet->config('STAGING_SITE')) {
+        # uncoverable branch true
+        if ($js && !FixMyStreet->test_mode) {
             # uncoverable statement
             $cache_file->spew_utf8($js);
         }

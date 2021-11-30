@@ -4,9 +4,13 @@ if (!fixmystreet.maps) {
     return;
 }
 
+var wfs_host = fixmystreet.staging ? 'tilma.staging.mysociety.org' : 'tilma.mysociety.org';
+var tilma_url = "https://" + wfs_host + "/mapserver/bucks";
+var proxy_base_url = "https://" + wfs_host + "/proxy/bcc/";
+
 var defaults = {
     http_options: {
-        url: "https://tilma.mysociety.org/mapserver/bucks",
+        url: tilma_url,
         params: {
             SERVICE: "WFS",
             VERSION: "1.1.0",
@@ -15,10 +19,7 @@ var defaults = {
         }
     },
     asset_type: 'spot',
-    max_resolution: {
-      'buckinghamshire': 2.116670900008467,
-      'fixmystreet': 4.777314267158508
-    },
+    max_resolution: 4.777314267158508,
     asset_id_field: 'central_as',
     attributes: {
         central_asset_id: 'central_as',
@@ -83,7 +84,18 @@ fixmystreet.assets.add(labeled_defaults, {
         'Street light dim',
         'Street light intermittent',
         'Street light not working' ],
-    asset_item: 'street light'
+    asset_item: 'street light',
+    asset_item_message: 'You can pick a <b class="asset-ITEM">ITEM</b> from the map &raquo;<br>If there is no yellow dot showing then this ITEM is not maintained by Transport for Buckinghamshire',
+    construct_selected_asset_message: function(asset) {
+        var id = asset.attributes[this.fixmystreet.feature_code] || '';
+        if (id === '') {
+            return;
+        }
+        var data = this.fixmystreet.construct_asset_name(id);
+        var extra = '. Only ITEMs maintained by Transport for Buckinghamshire are displayed.';
+        extra = extra.replace(/ITEM/g, data.name);
+        return 'You have selected ' + data.name + ' <b>' + data.id + '</b>' + extra;
+    }
 });
 
 fixmystreet.assets.add(labeled_defaults, {
@@ -158,15 +170,66 @@ fixmystreet.assets.add(labeled_defaults, {
 
 fixmystreet.assets.add(defaults, {
     http_options: {
+        url: proxy_base_url + 'drains/wfs',
         params: {
-            TYPENAME: "Gullies"
+            propertyName: 'id,msGeometry,asset_id,created,junction_cleaned',
+            TYPENAME: "junction_inspections"
         }
     },
-    asset_category: [
-        'Blocked drain'
-        ],
-    asset_item: 'drain'
+    stylemap: fixmystreet.assets.stylemap_invisible,
+    asset_category: ["Blocked drain"],
+    asset_item: 'drain',
+    non_interactive: true
 });
+
+fixmystreet.assets.add(defaults, {
+    http_options: {
+        url: proxy_base_url + 'drains/wfs',
+        params: {
+            propertyName: 'id,msGeometry,asset_id,created,last_inspected',
+            TYPENAME: "junctions"
+        }
+    },
+    asset_category: ["Blocked drain"],
+    asset_item: 'drain',
+    select_action: true,
+    construct_selected_asset_message: function(asset) {
+        var junctionInspectionLayer = window.fixmystreet.assets.layers.filter(function(elem) {
+            return elem.fixmystreet.body == "Buckinghamshire Council" && 
+            elem.fixmystreet.http_options.format.featureType == 'junction_inspections';
+        });
+        var inspection;
+        if (junctionInspectionLayer[0]) {
+            inspection = junctionInspectionLayer[0].features.filter(function(elem) {
+                return elem.attributes.asset_id == asset.attributes.asset_id &&
+                format_date(elem.attributes.created) == format_date(asset.attributes.last_inspected);
+            });
+        }
+        var last_clean = '';
+        var message = ' ';
+        if (inspection && inspection[0]) {
+            if (asset.attributes.last_inspected && inspection[0].attributes.junction_cleaned === 'true') {
+                last_clean = format_date(asset.attributes.last_inspected);
+                message = 'This gulley was last cleaned on ' + last_clean;
+            }
+        }
+        return message;
+    },
+    actions: {
+        asset_found: fixmystreet.assets.named_select_action_found,
+        asset_not_found: fixmystreet.assets.named_select_action_not_found
+    }
+});
+
+function format_date(date_field) {
+    var regExDate = /([0-9]{4})-([0-9]{2})-([0-9]{2})/;
+    var myMatch = regExDate.exec(date_field);
+    if (myMatch) {
+        return myMatch[3] + '/' + myMatch[2] + '/' + myMatch[1];
+    } else {
+        return '';
+    }
+}
 
 // The "whole street asset" layer indicates who is responsible for maintaining
 // a road via the 'feature_ty' attribute on features.
@@ -206,8 +269,8 @@ var ex_district_categories = [
 ];
 
 function category_unselected_or_ex_district() {
-    var cat = $('select#form_category').val();
-    if (cat === "-- Pick a category --" || cat === "Loading..." || OpenLayers.Util.indexOf(ex_district_categories, cat) != -1) {
+    var cat = fixmystreet.reporting.selectedCategory().category;
+    if (OpenLayers.Util.indexOf(ex_district_categories, cat) != -1) {
         return true;
     }
     return false;
@@ -263,7 +326,7 @@ var rule_not_owned = new OpenLayers.Rule({
 highways_style.addRules([rule_owned, rule_not_owned]);
 
 $(fixmystreet).on('report_new:highways_change', function() {
-    if (fixmystreet.body_overrides.get_only_send() === 'Highways England') {
+    if (fixmystreet.body_overrides.get_only_send() === 'National Highways') {
         $('#bucks_dangerous_msg').hide();
     } else {
         $('#bucks_dangerous_msg').show();
@@ -274,6 +337,7 @@ $(fixmystreet).on('report_new:highways_change', function() {
 fixmystreet.assets.add(defaults, {
     http_options: {
         params: {
+            propertyName: 'msGeometry,site_code,feature_ty',
             TYPENAME: "Whole_Street"
         }
     },
@@ -321,6 +385,7 @@ fixmystreet.assets.add(defaults, {
         }
     },
     no_asset_msg_id: '#js-not-a-road',
+    no_asset_msgs_class: '.js-roads-bucks',
     usrn: {
         attribute: 'site_code',
         field: 'site_code'
@@ -342,9 +407,9 @@ fixmystreet.assets.add(defaults, {
     road: true,
     actions: {
         found: function() {
-            var $div = $("#category_meta .js-gritting-notice");
+            var $div = $(".js-reporting-page.js-gritting-notice");
             if ($div.length) {
-                $div.show();
+                $div.removeClass('js-reporting-page--skip');
             } else {
                 var msg = "<div class='box-warning js-gritting-notice'>" +
                             "<h1>Winter Gritting</h1>" +
@@ -355,11 +420,11 @@ fixmystreet.assets.add(defaults, {
                             "policy</a>.</p>" +
                             "</div>";
                 $div = $(msg);
-                $div.prependTo("#category_meta");
+                fixmystreet.pageController.addNextPage('gritting', $div);
             }
         },
         not_found: function() {
-            $("#category_meta .js-gritting-notice").hide();
+            $('.js-reporting-page.js-gritting-notice').addClass('js-reporting-page--skip');
         }
     }
 });

@@ -229,7 +229,7 @@ sub cobrand_name {
     # Bromley Council" when making a report within Westminster on the TfL
     # cobrand.
     # If the current body is TfL then we always want to show TfL as the cobrand name.
-    return $self->name if $self->name eq 'TfL' || $self->name eq 'Highways England';
+    return $self->name if $self->name eq 'TfL' || $self->name eq 'National Highways' || $self->name eq 'Environment Agency';
 
     my $handler = $self->get_cobrand_handler;
     if ($handler && $handler->can('council_name')) {
@@ -242,6 +242,13 @@ sub calculate_average {
     my ($self, $threshold) = @_;
     $threshold ||= 0;
 
+    # respect the cobrand's cut-off date for displaying problems, if it exists
+    my %cutoff;
+    my $handler = $self->get_cobrand_handler;
+    if ($handler && $handler->can('cut_off_date')) {
+      $cutoff{'problem.confirmed'} = { '>=', $handler->cut_off_date } if $handler->cut_off_date;
+    }
+
     my $substmt = "select min(id) from comment where me.problem_id=comment.problem_id and (problem_state in ('fixed', 'fixed - council', 'fixed - user') or mark_fixed)";
     my $subquery = FixMyStreet::DB->resultset('Comment')->to_body($self)->search({
         -or => [
@@ -251,6 +258,7 @@ sub calculate_average {
         'me.id' => \"= ($substmt)",
         'me.state' => 'confirmed',
         'problem.state' => [ FixMyStreet::DB::Result::Problem->visible_states() ],
+        %cutoff,
     }, {
         select   => [
             { extract => \"epoch from me.confirmed-problem.confirmed", -as => 'time' },
@@ -270,6 +278,24 @@ sub calculate_average {
     my $count = $result->get_column('count');
 
     return $count >= $threshold ? $avg : undef;
+}
+
+=head2 staff_with_permission
+
+Returns a resultset of all staff users for the body who have been
+granted a specific permission.
+
+=cut
+
+sub staff_with_permission {
+    my ( $self, $permission ) = @_;
+    return $self->users->search([
+        { 'user_body_permissions.permission_type' => $permission },
+        { permissions => \"@> ARRAY['$permission']" }
+    ], {
+        join => [ 'user_body_permissions', { "user_roles" => "role" } ],
+        order_by => { '-asc' => ['name'] },
+    });
 }
 
 1;

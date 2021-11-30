@@ -212,9 +212,9 @@ When logged in, staff with the required level of permissions can moderate report
 report webpage. You will see a ‘moderate’ button below the report’s main body, and above each
 update. Clicking this button gives you the ability to:
 
-- Edit the title or body of the report or update
-- Remove a user’s name from the report or update
-- Remove a photograph from a report
+- Edit the title or body text
+- Remove a user’s name
+- Remove, redact or restore photographs
 
 <img alt="The ‘moderate’ button below the report’s main body" src="/assets/img/pro-user-guide/deal-undesirable-content.png" class="admin-screenshot" />
 
@@ -222,6 +222,14 @@ You can also add a note to indicate the reason for the change to the report.
 
 Moderation history will be shown within the report updates, and is only visible to people with
 the moderate permission.
+
+#### Redacting photographs
+
+When moderating, each photo has an associated “Redact” option. Selecting this
+opens up the full size photo, on which you can draw black rectangles if you
+need to hide a section of a photo without removing the entire photo.
+
+<img alt="" src="/assets/img/pro-user-guide/photo-redaction.jpeg" class="admin-screenshot">
 
 #### Hiding reports
 
@@ -244,20 +252,18 @@ user: see ‘[moderating reports](#deal-undesirable-content)’.
 
 #### Adding a user to the abuse list
 
-<span class="admin-task__permissions">Permissions required: User must be marked as staff, ‘Edit reports’ must be ticked.</span>
+<span class="admin-task__permissions">Permissions required: User must be marked as staff, ‘Edit users’ must be ticked.</span>
 
 You can add an abusive user's email to the abuse list, which automatically hides any reports they
 create, and means that their reports are not sent. Instead, the user sees a message that there was
 an error in confirming their report.
 
-Staff with the required permissions can ban a user directly from a report page, using the ‘Ban user’
+Staff with the required permissions can ban a user directly from their user admin page, using the ‘Ban user’
 button.
-
-<img alt="Ban a user directly from a report page" src="/assets/img/pro-user-guide/ban-user-report-page.png" class="admin-screenshot" />
 
 #### Removing users from the banned list
 
-When a user has been banned, an ‘unban’ button will be visible on their records and reports. This
+When a user has been banned, an ‘unban’ button will be visible on their user admin page. This
 restores them to the status of a standard user, but it does not have any effect on reports which
 were made during the period when the user was banned — these remain unsent.
 
@@ -435,6 +441,22 @@ individual report’s page, from the ‘all reports’ page, or from within your
 Shortlists can be ordered and filtered in the same way as the main list, by using the dropdown
 menus. You can also use the arrows beside each report title to move them up or down the list, until
 they are in a practical order for your route or priorities.
+
+#### Assigning reports to another user's shortlist
+
+<span class="admin-task__permissions">Permissions required: User must be marked as staff and 'Assign problem reports to users' must be ticked.</span>
+
+Managers of teams of inspectors can assign reports to the shortlists of inspectors (i.e. staff with the 'Markup problem details' permission). The assignment dropdown appears when editing reports with the inspector tool.
+
+Reports can also be assigned in bulk from the 'All reports' page, where inspector managers can see at a glance which reports are assigned to which inspectors, as well as which are unassigned.
+
+Assigned users can also be viewed on the Reports list page in the Admin area, as well as when editing a report in that list by clicking its 'Edit' link.
+
+#### Seeing which reports are assigned and unassigned
+
+<span class="admin-task__permissions">Permissions required: User must be marked as staff and 'Markup problem details' must be ticked.</span>
+
+In addition to seeing their own shortlist, inspectors can, like inspector managers, see which reports are assigned to other inspectors and which are unassigned both in the individual report webpage and in the 'All reports' list.
 
 #### Viewing navigation routes
 
@@ -643,7 +665,9 @@ You can edit categories at any time by clicking on their title within the table 
 Categories page.
 
 From here, you can change the email address that the reports in this category are routed to,
-or any of the other options for the category.
+or any of the other options for the category, such as the hint text shown to the user for
+this category, whether reporting should be disabled when this category is selected, or
+whether updates should be disabled on reports in this category.
 
 </div>
 
@@ -656,7 +680,7 @@ or any of the other options for the category.
 #### Note
 
 If your FixMyStreet Pro installation has been integrated with a CRM system, some of this
-section may not not apply, e.g. extra questions may be pulled directly from the backend.
+section may not apply, e.g. extra questions may be pulled directly from the backend.
 
 </div>
 
@@ -924,5 +948,29 @@ particular date range:
 <img alt="Screenshot of Bromley heatmap showing clusters in the north and north west."
     src="https://user-images.githubusercontent.com/4776/72752804-0eb6b700-3bbb-11ea-915b-5afde5235014.png">
 
+
+</div>
+
+
+<div class="admin-task" markdown="1" id="emergency-message">
+
+### Displaying an emergency message
+
+<span class="admin-task__permissions">Permissions required: User must be marked as staff and ‘Add/edit emergency message’ must be ticked.</span>
+
+This features allows you to set an emergency message which will be displayed on the homepage.
+
+Certain HTML tags can be used for formatting purposes. These are limited to the same set as described
+in ["HTML content in notices"](#html-content-in-notices). You should not use block-level HTML elements
+(e.g. `div`,`p`, etc) in the input field, as linebreaks are automatically converted to HTML tags. If
+you want multiple paragraphs they should be separated with blank lines as in the below example.
+
+To clear the message simply delete any contents in the box.
+
+<img alt="The HTML text entered in to the box will be rendered on the homepage."
+    src="/assets/img/pro-user-guide/emergency-message-editing.png" class="admin-screenshot" />
+
+<img alt="An emergency message can be shown to users on the FixMyStreet homepage."
+    src="/assets/img/pro-user-guide/emergency-message-example.png" class="admin-screenshot" />
 
 </div>

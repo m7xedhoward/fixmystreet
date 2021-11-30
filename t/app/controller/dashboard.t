@@ -189,7 +189,7 @@ FixMyStreet::override_config {
         my @rows = $mech->content_as_csv;
         is scalar @rows, 19, '1 (header) + 18 (reports) = 19 lines';
 
-        is scalar @{$rows[0]}, 21, '21 columns present';
+        is scalar @{$rows[0]}, 22, '22 columns present';
 
         is_deeply $rows[0],
             [
@@ -212,6 +212,7 @@ FixMyStreet::override_config {
                 'Easting',
                 'Northing',
                 'Report URL',
+                'Device Type',
                 'Site Used',
                 'Reported As',
             ],
@@ -268,6 +269,12 @@ FixMyStreet::override_config {
         $mech->get_ok("$loc?$token");
         like $mech->res->header('Content-type'), qr'text/csv';
         $mech->content_contains('Report ID');
+    };
+
+    subtest 'export CSV with slash in category name' => sub {
+        $mech->create_contact_ok(body_id => $body->id, category => "This/That", email => "this\@example.org");
+        my $token = 'access_token=' . $counciluser->id . '-1234567890abcdefgh';
+        $mech->get_ok("/dashboard?export=2&$token&category=This/That");
     };
 
     subtest 'view status page' => sub {

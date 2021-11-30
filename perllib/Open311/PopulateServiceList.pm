@@ -183,6 +183,7 @@ sub _handle_existing_contact {
 
     $self->_set_contact_group($contact) unless $protected;
     $self->_set_contact_non_public($contact);
+    $self->_set_contact_as_waste_only($contact);
 
     push @{ $self->found_contacts }, $self->_current_service->{service_code};
 }
@@ -218,6 +219,7 @@ sub _create_contact {
 
     $self->_set_contact_group($contact);
     $self->_set_contact_non_public($contact);
+    $self->_set_contact_as_waste_only($contact);
 
     if ( $contact ) {
         push @{ $self->found_contacts }, $self->_current_service->{service_code};
@@ -251,7 +253,8 @@ sub _add_meta_to_contact {
         @{ $meta_data->{attributes} };
 
     # and then add back in any protected fields that we don't fetch
-    push @meta, values %$protected;
+    # sort by code for consistent sort order later on
+    push @meta, sort { $a->{code} cmp $b->{code} } values %$protected;
 
     # turn the data into something a bit more friendly to use
     @meta =
@@ -323,16 +326,33 @@ sub _set_contact_non_public {
     }) if $keywords{private};
 }
 
+sub _set_contact_as_waste_only {
+    my ($self, $contact) = @_;
+
+    my %keywords = map { $_ => 1 } split /,/, ( $self->_current_service->{keywords} || '' );
+    my $waste_only = $keywords{waste_only} ? 1 : 0;
+    my $old_waste_only = $contact->get_extra_metadata("waste_only") || 0;
+
+    if ($waste_only != $old_waste_only) {
+        $contact->set_extra_metadata(waste_only => $waste_only);
+        $contact->update({
+            %{ $self->_action_params("set waste_only to $waste_only") },
+        });
+    }
+}
+
 sub _get_new_groups {
     my $self = shift;
     return [] unless $self->_current_body_cobrand && $self->_current_body_cobrand->enable_category_groups;
 
     my $groups = $self->_current_service->{groups} || [];
-    return $groups if @$groups;
+    my @groups = map { Utils::trim_text($_) } @$groups;
+    return \@groups if @groups;
 
     my $group = $self->_current_service->{group} || [];
     $group = [] if @$group == 1 && !$group->[0]; # <group></group> becomes [undef]...
-    return $group;
+    @groups = map { Utils::trim_text($_) } @$group;
+    return \@groups;
 }
 
 sub _groups_different {

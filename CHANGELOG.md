@@ -1,6 +1,76 @@
 ## Releases
 
 * Unreleased
+    - Front end improvements:
+        - Multi-page form reporting.
+        - New aerial map toggle.
+        - Send text alerts for report updates to only-phone-verified users.
+        - Add options for user to set global notification preferences.
+        - Pop over mobile navigation menu. #3270
+        - Add support for the OS Maps API. #3328
+        - Speed up /report/new/ajax call. #3335
+        - Improve `#geolocate_link` display, especially for smaller screens. #2048
+        - Allow email alert radius to be specified. #68
+        - Update URL on /my when map moves. #3358
+        - Make anonymous updates clearer in email alerts. #3417
+        - Add Maidenhead Locator support to search box.
+        - Update RSS link when distance box changed. #3624
+        - Inspector-managers can assign reports to inspectors
+          in the inspector toolbar.
+        - Inspectors & inspector-managers can see who a report is assigned
+          to or 'unassigned' if a report is unassigned.
+    - Bugfixes:
+        - Fix non-JS form when all extra questions answered. #3248
+        - Improve display of disabled fields in iOS.
+        - Use div for inspector form wrapped extra questions. #3250
+        - Fix Open311 JSON services output. #3279
+        - Send email reports in staff-only categories.
+        - Fix Gaze sometimes being called twice on /around. #3324
+        - Improved alert signup for phone-only user. #3367
+        - Fix moderation of update text.
+        - Only trigger one refresh going Back to list view. #3476
+        - Fix checked order of updates in dashboard export.
+        - Fix unable to edit user with verified landline #3295
+        - Fix 'sites' page to reflect active fixmystreet sites #2481
+        - Fix ordering of dropdown lists in extra questions #3566
+        - Fix removal of cached opengraph photos.
+        - Do not email inactive body comment users. #3587
+        - Look up organizational domain in DMARC checking. #3603
+        - Stop slash in category name breaking csv download #3642
+        - Fix CSS z-index bug that resulted in the main menu being hidden behind the map on small screens #3686
+    - Admin improvements:
+        - Assignees of reports are now visible in admin reports list and report edit pages.
+        - Enable per-category hint customisation.
+        - Move ban/unban buttons to user edit admin page.
+        - Add link to user edit admin from report/update edit admin.
+        - Improve layout of some admin pages.
+        - Include email in inspector form information.
+        - Improve wording of new report Private checkbox.
+        - No questionnaires on reports as body/anonymous.
+        - CSV export, improve Site Used and add Device Type.
+        - Always record contributed_by for staff users.
+        - Add per-photo moderation. #3055
+        - Redaction support for photos.
+        - UK Councils no questionnaires for non-updating users
+        - Script to export/import response templates, #3549
+        - Include non-public report in front page search for staff. #3616
+        - Include staff categories in map filters for staff. #3616
+    - Development improvements:
+        - Include failure count in send report error output, #3316
+        - Sort output in export script. #3323
+        - Show relevant updates in alert-update email preview. #3417
+        - Upgrade jQuery to 3.6.0. #3017
+        - Upgrade Mozilla::CA to handle new root certificates.
+        - Factor alert script to slightly smaller functions. #3615
+        - Add development Docker environment.
+    - Open311 improvements:
+        - Consistent protected field ordering.
+        - Move test handling out of core code.
+    - Security:
+        - Increase minimum password length to eight.
+        - Allow throttling by user login attempts
+    - Changes
+        - Send contact form emails from do-not-reply address if sender's domain uses DMARC.
 
 * v3.1 (16th November 2020)
     - Security:
@@ -15,6 +85,7 @@
         - Select matches for both filter category and group. #3110
         - Add an extra zoom level to most map types. #3130
         - Improve new report form when using phone verification. #3191
+        - Add option to set an emergency message on the homepage.
     - Changes:
         - Mark user as active when sent an email alert. #3045
     - Bugfixes:
@@ -74,6 +145,7 @@
     - UK:
         - Add option for recaptcha. #3050
         - Display search tips when location search returns no results. #3180
+        - Add ability to use GOV.UK Notify for text messaging.
 
 * v3.0.1 (6th May 2020)
     - New features:

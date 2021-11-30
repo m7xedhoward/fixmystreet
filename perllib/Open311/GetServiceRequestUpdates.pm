@@ -3,11 +3,14 @@ package Open311::GetServiceRequestUpdates;
 use Moo;
 extends 'Open311::UpdatesBase';
 
+use Readonly;
 use DateTime::Format::W3CDTF;
 
 has '+send_comments_flag' => ( default => 1 );
 has start_date => ( is => 'ro', default => sub { undef } );
 has end_date => ( is => 'ro', default => sub { undef } );
+
+has comments_created => ( is => 'rw', default => 0 );
 
 Readonly::Scalar my $AREA_ID_BROMLEY     => 2482;
 Readonly::Scalar my $AREA_ID_OXFORDSHIRE => 2237;
@@ -53,17 +56,27 @@ sub process_body {
         return 0;
     }
 
+    $self->process_requests($requests, \@args);
+
+    return 1;
+}
+
+sub process_requests {
+    my ($self, $requests, $args) = @_;
+
+    my $created = 0;
     for my $request (@$requests) {
         next unless defined $request->{update_id};
 
-        my $p = $self->find_problem($request, @args) or next;
+        my $p = $self->find_problem($request, @$args) or next;
         my $c = $p->comments->search( { external_id => $request->{update_id} } );
         next if $c->first;
 
+        $created++;
+
         $self->process_update($request, $p);
     }
-
-    return 1;
+    $self->comments_created( $created );
 }
 
 sub _find_problem {

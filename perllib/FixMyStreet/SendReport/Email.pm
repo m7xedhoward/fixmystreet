@@ -1,10 +1,17 @@
 package FixMyStreet::SendReport::Email;
 
 use Moo;
+use MooX::Types::MooseLike::Base qw(:all);
 use FixMyStreet::Email;
 use Utils::Email;
 
 BEGIN { extends 'FixMyStreet::SendReport'; }
+
+has to => ( is => 'ro', isa => ArrayRef, default => sub { [] } );
+has bcc => ( is => 'ro', isa => ArrayRef, default => sub { [] } );
+
+has use_verp => ( is => 'ro', isa => Int, default => 1 );
+has use_replyto => ( is => 'ro', isa => Int, default => 0 );
 
 sub build_recipient_list {
     my ( $self, $row, $h ) = @_;
@@ -16,7 +23,7 @@ sub build_recipient_list {
 
         my ($body_email, $state, $note) = ( $contact->email, $contact->state, $contact->note );
 
-        unless ($state eq 'confirmed') {
+        if ($state eq 'unconfirmed') {
             $all_confirmed = 0;
             $note = 'Body ' . $row->bodies_str . ' deleted'
                 unless $note;
@@ -54,7 +61,7 @@ sub envelope_sender {
     my ($self, $row) = @_;
 
     my $cobrand = $row->get_cobrand_logged;
-    if ($row->user->email && $row->user->email_verified) {
+    if ($self->use_verp && $row->user->email && $row->user->email_verified) {
         return FixMyStreet::Email::unique_verp_id([ 'report', $row->id ], $cobrand->call_hook('verp_email_domain'));
     }
     return $cobrand->do_not_reply_email;
@@ -90,14 +97,20 @@ sub send {
     $params->{Bcc} = $self->bcc if @{$self->bcc};
 
     my $sender = $self->envelope_sender($row);
-    if ($row->user->email && $row->user->email_verified) {
+    if ($params->{From}) {
+        # Don't do anything if something has been included already
+    } elsif ($row->user->email && $row->user->email_verified) {
         $params->{From} = $self->send_from( $row );
     } else {
         my $name = sprintf(_("On behalf of %s"), @{ $self->send_from($row) }[1]);
         $params->{From} = [ $sender, $name ];
     }
 
-    if (FixMyStreet::Email::test_dmarc($params->{From}[0])
+    my $use_reply_to = $cobrand->feature('always_use_reply_to');
+
+    if ( $self->use_replyto
+      || $use_reply_to
+      || FixMyStreet::Email::test_dmarc($params->{From}[0])
       || Utils::Email::same_domain($params->{From}, $params->{To})) {
         $params->{'Reply-To'} = [ $params->{From} ];
         $params->{From} = [ $sender, $params->{From}[1] ];

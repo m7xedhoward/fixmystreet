@@ -28,6 +28,7 @@ body.mappage {
   display: block; // remove flex so nav touches top of parent
   min-height: 0; // no vertical align, so no need for a height
   margin-top: 0; // don't bother overlapping the border
+  height: auto;
 
   .ie9 & > * {
     position: static;
@@ -64,6 +65,11 @@ body.alertindex form.full-width {
 // The page h1 needs to be white on desktop, because it's in a blue box
 h1.main {
   color: #fff;
+}
+
+.emergency-message {
+    padding: 1em;
+    font-size: 1em;
 }
 
 // We have slightly different content in our lists of issues to what

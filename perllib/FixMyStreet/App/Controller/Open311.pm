@@ -8,6 +8,7 @@ use JSON::MaybeXS;
 use XML::Simple;
 use DateTime::Format::W3CDTF;
 use FixMyStreet::MapIt;
+use URI::Escape;
 
 BEGIN { extends 'Catalyst::Controller'; }
 
@@ -50,7 +51,59 @@ Displays some summary information for the requests.
 
 sub index : Path : Args(0) {
     my ( $self, $c ) = @_;
-    # don't need to do anything here - should just pass through.
+
+    $c->stash->{show_agency_responsible} = 1;
+    my $jurisdiction_id = $c->cobrand->jurisdiction_id_example;
+    my $example_category = $c->model('DB::Contact')->active->first->category;
+    my $example_category_uri_escaped = URI::Escape::uri_escape_utf8($example_category);
+    my $example_lat = 60;
+    my $example_long = 11;
+
+    if ($c->cobrand->moniker eq 'zurich') {
+        $c->stash->{show_agency_responsible} = 0;
+        $example_lat = 47.3;
+        $example_long = 8.5;
+    }
+
+    $c->stash->{examples} = [
+        {
+            url => "/open311/v2/discovery.xml?jurisdiction_id=$jurisdiction_id",
+            info => 'discovery information',
+        },
+        {
+            url => "/open311/v2/services.xml?jurisdiction_id=$jurisdiction_id",
+            info => 'list of services provided',
+        },
+        {
+            url => "/open311/v2/services.xml?jurisdiction_id=$jurisdiction_id&lat=$example_lat&long=$example_long",
+            info => "list of services provided for WGS84 coordinate latitude $example_lat longitude $example_long",
+        },
+        {
+            url => "/open311/v2/requests/1.xml?jurisdiction_id=$jurisdiction_id",
+            info => 'Request number 1',
+        },
+        {
+            url => "/open311/v2/requests.xml?jurisdiction_id=$jurisdiction_id&service_code=$example_category_uri_escaped",
+            info => "All requests with the category '$example_category'",
+        },
+        {
+            url => "/open311/v2/requests.xml?jurisdiction_id=$jurisdiction_id&status=closed",
+            info => 'All closed requests',
+        },
+    ];
+
+    if ($c->stash->{show_agency_responsible}) {
+        push(@{$c->stash->{examples}}, (
+            {
+                url => "/open311/v2/requests.xml?jurisdiction_id=$jurisdiction_id&status=open&agency_responsible=1601&end_date=2011-03-10",
+                info => 'All open requests reported before 2011-03-10 to Trondheim (id 1601)',
+            },
+            {
+                url => "/open311/v2/requests.xml?jurisdiction_id=$jurisdiction_id&status=open&agency_responsible=219|220",
+                info => 'All open requests in Asker (id 220) and Bærum (id 219)',
+            },
+        ));
+    }
 }
 
 sub old_uri : Regex('^open311\.cgi') : Args(0) {
@@ -102,47 +155,24 @@ sub get_discovery : Private {
     my ( $self, $c ) = @_;
 
     my $contact_email = $c->cobrand->contact_email;
-    my $prod_url = 'http://www.fiksgatami.no/open311';
-    my $test_url = 'http://fiksgatami-dev.nuug.no/open311';
-    my $prod_changeset = '2011-04-08T00:00:00Z';
-    my $test_changeset = $prod_changeset;
+    my $endpoint_url = $c->request->uri;
+    $endpoint_url->path_query('/open311');
+    my $changeset = '2021-03-01T00:00:00Z';
     my $spec_url = 'http://wiki.open311.org/GeoReport_v2';
     my $info =
     {
-        'contact' => ["Send email to $contact_email."],
-        'changeset' => [$prod_changeset],
-        'max_requests' => [ $c->config->{OPEN311_LIMIT} || 1000 ],
+        'contact' => "Send email to $contact_email.",
+        'changeset' => $changeset,
+        'max_requests' => $c->config->{OPEN311_LIMIT} || 1000,
         'endpoints' => [
             {
-                'endpoint' => [
-                    {
-                        'formats' => [
-                            {'format' => [ 'text/xml',
-                                           'application/json',
-                                           'text/html' ]
-                            }
-                            ],
-                        'specification' => [ $spec_url ],
-                        'changeset' => [ $prod_changeset ],
-                        'url' => [ $prod_url ],
-                        'type' => [ 'production' ]
-                    },
-                    {
-                        'formats' => [
-                            {
-                                'format' => [ 'text/xml',
-                                              'application/json',
-                                              'text/html' ]
-                            }
-                            ],
-                        'specification' => [ $spec_url ],
-                        'changeset' => [ $test_changeset ],
-                        'url' => [ $test_url ],
-                        'type' => [ 'test' ]
-                    }
-                    ]
-            }
-            ]
+                'formats' => [ 'text/xml', 'application/json', 'text/html' ],
+                'specification' => $spec_url,
+                'changeset' => $changeset,
+                'url' => $endpoint_url->as_string,
+                'type' => $c->config->{STAGING_SITE} ? 'test' : 'production'
+            },
+        ]
     };
     $c->forward( 'format_output', [ {
         'discovery' => $info
@@ -182,13 +212,13 @@ sub get_services : Private {
              {
                  # FIXME Open311 v2 seem to require all three, and we
                  # only have one value.
-                 'service_name' => [ $categoryname ],
-                 'description' =>  [ $categoryname ],
-                 'service_code' => [ $categoryname ],
-                 'metadata' => [ 'false' ],
-                 'type' => [ 'realtime' ],
-#                 'group' => [ '' ],
-#                 'keywords' => [ '' ],
+                 'service_name' => $categoryname,
+                 'description' => $categoryname,
+                 'service_code' => $categoryname,
+                 'metadata' => 'false',
+                 'type' => 'realtime',
+#                 'group' => '',
+#                 'keywords' => '',
              }
             );
     }
@@ -205,7 +235,7 @@ sub output_requests : Private {
         unless $limit && $limit <= $default_limit;
 
     my $attr = {
-        order_by => { -desc => 'confirmed' },
+        order_by => { -desc => $c->cobrand->moniker eq 'zurich' ? 'created' : 'confirmed' },
         rows => $limit
     };
 
@@ -371,7 +401,7 @@ sub rss_query : Private {
 
     my $attr = {
         result_class => 'DBIx::Class::ResultClass::HashRefInflator',
-        order_by => { -desc => 'confirmed' },
+        order_by => { -desc => $c->cobrand->moniker eq 'zurich' ? 'created' : 'confirmed' },
         rows => $limit
     };
 
@@ -422,6 +452,8 @@ sub format_output : Private {
             service_requests => 'request',
             errors => 'error',
             service_request_updates => 'request_update',
+            endpoints => 'endpoint',
+            formats => 'format',
         };
         $c->res->body( XMLout($hashref,
             KeyAttr => {},

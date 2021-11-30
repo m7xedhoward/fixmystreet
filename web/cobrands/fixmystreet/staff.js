@@ -53,8 +53,10 @@ fixmystreet.staff_set_up = {
         $item.insertBefore( $item.prev() );
       } else if ('shortlist-remove' === whatUserWants) {
           fixmystreet.utils.toggle_shortlist($submitButton, 'add', report_id);
+          fixmystreet.utils.update_unassigned($item, $list);
       } else if ('shortlist-add' === whatUserWants) {
           fixmystreet.utils.toggle_shortlist($submitButton, 'remove', report_id);
+          fixmystreet.utils.update_assignee($item, $list);
       }
 
       // Items have moved around. We need to make sure the "up" button on the
@@ -77,10 +79,14 @@ fixmystreet.staff_set_up = {
           fixmystreet.utils.toggle_shortlist($submitButton, 'add', report_id);
         }
         fixmystreet.update_list_item_buttons($list);
-      }).complete(function() {
+        // undo assignee changes
+        $('.oldassign').removeClass('oldassign').show();
+        $('.newassign').remove();
+      }).always(function() {
         if ($hiddenInput) {
           $hiddenInput.remove();
         }
+        $('.oldassign').remove();
       });
     });
   },
@@ -133,7 +139,7 @@ fixmystreet.staff_set_up = {
             $addAlertCheckbox.prop('checked', false).prop('disabled', true);
         }
     });
-    $('.js-contribute-as').change();
+    $('.js-contribute-as').trigger('change');
   },
 
   report_page_inspect: function() {
@@ -171,7 +177,7 @@ fixmystreet.staff_set_up = {
     }
 
     function populateSelect($select, data, label_formatter) {
-      $select.find('option:gt(0)').remove();
+      $select.find('option').slice(1).remove();
       if (data.constructor !== Array) {
         return;
       }
@@ -187,7 +193,7 @@ fixmystreet.staff_set_up = {
 
     // On the manage/inspect report form, we already have all the extra inputs
     // in the DOM, we just need to hide/show them as appropriate.
-    $inspect_form.find('[name=category]').change(function() {
+    $inspect_form.find('[name=category]').on('change', function() {
         var category = $(this).val(),
             selector = "[data-category='" + category + "']",
             entry = $inspect_form.find(selector),
@@ -214,14 +220,14 @@ fixmystreet.staff_set_up = {
     }
     var $state_dropdown = $inspect_form.find("[name=state]");
     state_change($state_dropdown.val());
-    $state_dropdown.change(function(){
+    $state_dropdown.on('change', function(){
         var state = $(this).val();
         state_change(state);
         // We might also have a response template to preselect for the new state
         var $select = $inspect_form.find("select.js-template-name");
         var $option = $select.find("option[data-problem-state='"+state+"']").first();
         if ($option.length) {
-            $select.val($option.val()).change();
+            $select.val($option.val()).trigger('change');
         }
     });
 
@@ -339,29 +345,29 @@ fixmystreet.staff_set_up = {
                   $('#map_sidebar').scrollTop(word === 'problem' ? 0 : $elem[0].offsetTop);
               });
 
-              $elem.find('.revert-title').change( function () {
+              $elem.find('.revert-title').on('change', function () {
                   toggle_original($elem.find('input[name=problem_title]'), $(this).prop('checked'));
               });
 
-              $elem.find('.revert-textarea').change( function () {
+              $elem.find('.revert-textarea').on('change', function () {
                   toggle_original($elem.find('textarea'), $(this).prop('checked'));
               });
 
               var hide_document = $elem.find('.hide-document');
-              hide_document.change( function () {
+              hide_document.on('change', function () {
                   $elem.find('input[name=problem_title]').prop('disabled', $(this).prop('checked'));
                   $elem.find('textarea').prop('disabled', $(this).prop('checked'));
                   $elem.find('input[type=checkbox]').prop('disabled', $(this).prop('checked'));
                   $(this).prop('disabled', false); // in case disabled above
               });
 
-              $elem.find('.cancel').click( function () {
+              $elem.find('.cancel').on('click', function() {
                   $elem.toggleClass('show-moderation');
                   $('.js-moderation-error').hide();
                   $('#map_sidebar').scrollTop(word === 'problem' ? 0 : $elem[0].offsetTop);
               });
 
-              $elem.find('form').submit( function () {
+              $elem.find('form').on('submit', function () {
                   if (hide_document.prop('checked')) {
                       return confirm('This will hide the ' + word + ' completely!  (You will not be able to undo this without contacting support.)');
                   }
@@ -379,16 +385,33 @@ fixmystreet.staff_set_up = {
     // response template. If the field is empty, it's not considered dirty.
     $('.js-template-name').each(function() {
         var $input = $('#' + $(this).data('for'));
-        $input.change(function() { $(this).data('dirty', !/^\s*$/.test($(this).val())); });
+        $input.on('change', function() { $(this).data('dirty', !/^\s*$/.test($(this).val())); });
     });
 
-    $('.js-template-name').change(function() {
+    $('.js-template-name').on('change', function() {
         var $this = $(this);
         var $input = $('#' + $this.data('for'));
         if (!$input.data('dirty')) {
             $input.val($this.val());
         }
     });
+  },
+
+  fancybox_moderation: function() {
+    if (!$.fancybox) {
+        return;
+    }
+    $('a[rel=fancy_moderation]').fancybox({
+        'overlayColor': '#000000',
+        showNavArrows: false,
+        enableKeyboardNav: false,
+        onComplete: fixmystreet.redact.setup,
+        onClosed: fixmystreet.redact.teardown,
+        titlePosition: 'outside',
+        titleFormat: fixmystreet.redact.titleText
+    });
+    $('body').on('click', '.js-redact-done', $.fancybox.close);
+    $('body').on('click', '.js-redact-undo', fixmystreet.redact.undo);
   },
 
   open311_category_edit: function() {
@@ -440,9 +463,9 @@ $(fixmystreet).on('display:report', function() {
 });
 
 $(fixmystreet).on('report_new:category_change', function() {
-    var $this = $('#form_category');
-    var category = $this.find("option:selected").text();
-    if (category === '-- Pick a category --') { return; }
+    var $this = $('#form_category_fieldset');
+    var category = fixmystreet.reporting.selectedCategory().category_display;
+    if (!category) { return; }
     var prefill_reports = $this.data('prefill');
     var display_names = fixmystreet.reporting_data ? fixmystreet.reporting_data.display_names || {} : {};
     var body = display_names[ $this.data('body') ] || $this.data('body');
@@ -507,15 +530,20 @@ $.extend(fixmystreet.maps, {
   },
 
   show_shortlist_control: function() {
-    var $shortlistButton = $('#fms_shortlist_all');
+    var $shortlistButton = $('#fms_shortlist_all'),
+        $sub_map_links = $('#sub_map_links');
     if ($shortlistButton === undefined || fixmystreet.page != "reports" ) {
       return;
     }
 
     if (fixmystreet.map.getZoom() >= 14) {
       $shortlistButton.removeClass('hidden');
+      $sub_map_links.show();
     } else {
       $shortlistButton.addClass('hidden');
+      if (!$sub_map_links.find('a').not('.hidden').length) {
+          $('#sub_map_links').hide();
+      }
     }
   }
 });
@@ -540,5 +568,107 @@ $.extend(fixmystreet.utils, {
             sw += '-' + id;
         }
         btn.attr('name', 'shortlist-' + sw);
+    },
+    update_unassigned: function($li, $ul) {
+        $li.find('span.assignee').addClass('oldassign').hide();
+        $li.find('span.assignee').after('<span class="assignee newassign">(unassigned)</span>');
+    },
+    update_assignee: function($li, $ul) {
+        var user_name = $ul.data('userName');
+        var user_email = $ul.data('userEmail');
+        var user_handle = user_name ? user_name : user_email;
+        $li.find('span.assignee').addClass('oldassign').hide();
+        $li.find('span.assignee').after('<span class="assignee newassign">' + user_handle + '</span>');
     }
 });
+
+(function() {
+    var unique_id, img, w, h, rects, rect, drag, canvas, context;
+
+    function createCanvas() {
+        canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        img.after(canvas);
+        canvas.addEventListener('mousedown', mouseDown, false);
+        canvas.addEventListener('mouseup', mouseUp, false);
+        canvas.addEventListener('mousemove', mouseMove, false);
+        context = canvas.getContext('2d');
+        context.fillStyle = 'black';
+    }
+
+    function mouse_pos(elt, e) {
+        var r = elt.getBoundingClientRect();
+        return { 'x': e.pageX - r.x, 'y': e.pageY - r.y };
+    }
+
+    function mouseDown(e) {
+        var m = mouse_pos(this, e);
+        rect = { x: m.x, y: m.y, w: 0, h: 0 };
+        drag = true;
+    }
+
+    function mouseUp(e) {
+        drag = false;
+        if (!rect.w || !rect.h) {
+            return;
+        }
+        createCanvas();
+        rects.push(rect);
+        set_value('redact', rects);
+    }
+
+    function draw(rect) {
+        context.fillRect(rect.x, rect.y, rect.w, rect.h);
+    }
+
+    function mouseMove(e) {
+        if (drag) {
+            context.clearRect(rect.x, rect.y, rect.w, rect.h);
+            var m = mouse_pos(this, e);
+            rect.w = m.x - rect.x;
+            rect.h = m.y - rect.y;
+            draw(rect);
+        }
+    }
+
+    function set_value(key, obj) {
+        document.getElementById(unique_id + '_' + key).value = JSON.stringify(obj);
+    }
+
+    fixmystreet.redact = {
+        setup: function(arr, idx, opts) {
+            unique_id = opts.orig[0].id;
+            img = $('#fancybox-img');
+            h = img.height();
+            w = img.width();
+
+            try {
+                rects = JSON.parse(document.getElementById(unique_id + '_redact').value);
+            } catch (e) {
+                rects = [];
+            }
+            rects.forEach(function(rect) {
+                createCanvas();
+                draw(rect);
+            });
+            set_value('size', { width: w, height: h });
+            createCanvas();
+        },
+        teardown: function(arr, idx, opts) {
+            if (rects.length) {
+                opts.orig.text(translation_strings.redaction_link + ' (' + rects.length + ')');
+            } else {
+                opts.orig.text(translation_strings.redaction_link);
+            }
+        },
+        undo: function(e) {
+            $('#fancybox-content canvas:nth-of-type(2)').remove();
+            rects.pop();
+            set_value('redact', rects);
+        },
+        titleText: function() {
+            return '<p>' + translation_strings.redaction_help + ' <button class="js-redact-done">' + translation_strings.redaction_done + '</button> <button class="js-redact-undo">' + translation_strings.redaction_undo + '</button></p>';
+        }
+    };
+})();

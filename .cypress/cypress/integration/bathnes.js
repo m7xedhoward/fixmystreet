@@ -16,6 +16,7 @@ it('loads the staff layer correctly', function() {
     cy.get('[name=pc]').parents('form').submit();
     cy.url().should('include', '/around');
     cy.window().its('fixmystreet.maps').should('have.property', 'banes_defaults');
+    cy.get('.olMap'); // Make sure map is loaded before testing its layers
     cy.window().then(function(win){
         var llpg = 0;
         win.fixmystreet.map.layers.forEach(function(lyr) {
@@ -25,4 +26,27 @@ it('loads the staff layer correctly', function() {
         });
         expect(llpg).to.equal(1);
     });
+});
+
+it('uses the Curo Group housing layer correctly', function() {
+    cy.server();
+    cy.route(/.*?isharemaps.*?Curo_Land_Registry.*/, 'fixture:banes-caro-group-housing-layer.json').as('banes-caro-group-housing-layer-tilma');
+    cy.route('/report/new/ajax*').as('report-ajax');
+    cy.visit('http://bathnes.localhost:3001/report/new?longitude=-2.359276&latitude=51.379009');
+    cy.contains('Bath & North East Somerset Council');
+    cy.wait('@banes-caro-group-housing-layer-tilma');
+    cy.wait('@report-ajax');
+    cy.pickCategory('Dog fouling');
+    cy.contains('Maintained by Curo Group').should('be.visible');
+});
+
+it('handles code names with spaces without error', function() {
+    cy.server();
+    cy.route('/report/new/ajax*').as('report-ajax');
+    cy.visit('http://bathnes.localhost:3001/report/new?longitude=-2.359276&latitude=51.379009');
+    cy.wait('@report-ajax');
+    cy.get('input[value="Abandoned vehicles"]').click();
+    cy.get('input[value="Blocked drain"]').click();
+    cy.get('input[value="Abandoned vehicles"]').click();
+    cy.contains('Not maintained by Bath & North East Somerset Council');
 });

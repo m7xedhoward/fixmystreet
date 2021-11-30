@@ -71,15 +71,7 @@ sub index : Path {
         my $valid_phone = $parsed->{phone};
         my $valid_email = $parsed->{email};
 
-        if ($valid_email) {
-            $query->{'-or'} = [
-                'user.email' => { ilike => $like_search },
-            ];
-        } elsif ($valid_phone) {
-            $query->{'-or'} = [
-                'user.phone' => { ilike => $like_search },
-            ];
-        } elsif ($search =~ /^id:(\d+)$/) {
+        if ($search =~ /^id:(\d+)$/) {
             $query->{'-or'} = [
                 'me.id' => int($1),
             ];
@@ -90,6 +82,14 @@ sub index : Path {
         } elsif ($search =~ /^ref:(\d+)$/) {
             $query->{'-or'} = [
                 'me.external_id' => { like => "%$1%" }
+            ];
+        } elsif ($valid_email) {
+            $query->{'-or'} = [
+                'user.email' => { ilike => $like_search },
+            ];
+        } elsif ($valid_phone) {
+            $query->{'-or'} = [
+                'user.phone' => { ilike => $like_search },
             ];
         } else {
             $problems = $problems->search_text($search);
@@ -289,17 +289,6 @@ sub edit : Path('/admin/report_edit') : Args(1) {
         $c->stash->{status_message} = _('That problem has been marked as sent.');
         $c->forward( '/admin/log_edit', [ $id, 'problem', 'marked sent' ] );
     }
-    elsif ( $c->get_param('flaguser') ) {
-        $c->forward('/admin/users/flag');
-        $c->stash->{problem}->discard_changes;
-    }
-    elsif ( $c->get_param('removeuserflag') ) {
-        $c->forward('/admin/users/flag_remove');
-        $c->stash->{problem}->discard_changes;
-    }
-    elsif ( $c->get_param('banuser') ) {
-        $c->forward('/admin/users/ban');
-    }
     elsif ( $c->get_param('submit') ) {
         $c->forward('/auth/check_csrf_token');
 
@@ -459,7 +448,7 @@ sub edit_location : Private {
         $c->stash->{fetch_all_areas} = 1;
         $c->stash->{area_check_action} = 'admin';
         $c->forward('/council/load_and_check_areas', []);
-        $c->forward('/report/new/setup_categories_and_bodies');
+        $c->forward('/report/new/setup_categories_and_bodies', []);
         my %allowed_bodies = map { $_ => 1 } @{$problem->bodies_str_ids};
         my @new_bodies = keys %{$c->stash->{bodies_to_list}};
         my $bodies_match = grep { exists( $allowed_bodies{$_} ) } @new_bodies;
@@ -485,10 +474,7 @@ sub categories_for_point : Private {
     $c->forward('/around/check_location_is_acceptable', [ $prefetched_all_areas ]);
     # As with a new report, fetch the bodies/categories
     $c->stash->{categories_for_point} = 1;
-    $c->forward('/report/new/setup_categories_and_bodies');
-
-    # Remove the "Pick a category" option
-    shift @{$c->stash->{category_options}} if @{$c->stash->{category_options}};
+    $c->forward('/report/new/setup_categories_and_bodies', []);
 
     $c->stash->{categories_hash} = { map { $_->category => 1 } @{$c->stash->{category_options}} };
 

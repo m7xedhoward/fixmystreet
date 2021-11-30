@@ -3,8 +3,6 @@ package FixMyStreet::App::Form::Waste;
 use HTML::FormHandler::Moose;
 extends 'FixMyStreet::App::Form::Wizard';
 
-has c => ( is => 'ro' );
-
 has default_page_type => ( is => 'ro', isa => 'Str', default => 'Waste' );
 
 has finished_action => ( is => 'ro' );
@@ -48,5 +46,23 @@ before after_build => sub {
 
     map { $saved_data->{$_} = 1 } grep { /^(service|container)-/ && $c->req->params->{$_} } keys %{$c->req->params};
 };
+
+sub validate {
+    my $self = shift;
+
+    my $email = $self->field('email');
+    my $phone = $self->field('phone');
+    return 1 unless $email && $phone;
+
+    my $c = $self->c;
+    my $cobrand = $c->cobrand->moniker;
+    my $is_staff_user = ($c->user_exists && ($c->user->from_body || $c->user->is_superuser));
+
+    $self->add_form_error('Please provide an email address')
+        unless $email->is_inactive || $email->value || $is_staff_user;
+
+    $self->add_form_error('Please provide email and/or phone')
+        unless $phone->is_inactive || $phone->value || $email->value || ($is_staff_user && $cobrand eq 'bromley');
+}
 
 1;

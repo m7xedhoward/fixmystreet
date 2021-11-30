@@ -10,7 +10,7 @@ sub council_area { 'Bexley' }
 sub council_name { 'London Borough of Bexley' }
 sub council_url { 'bexley' }
 sub get_geocoder { 'Bexley' }
-sub map_type { 'MasterMap' }
+sub default_map_zoom { 4 }
 
 sub disambiguate_location {
     my $self    = shift;
@@ -21,6 +21,20 @@ sub disambiguate_location {
         centre => '51.46088,0.142359',
         bounds => [ 51.408484, 0.074653, 51.515542, 0.2234676 ],
     };
+}
+
+sub geocode_postcode {
+    my ( $self, $s ) = @_;
+
+    # split postcode with a centroid in neighbouring Dartford
+    if ($s =~ /^DA5\s*2BD$/i) {
+        return {
+            latitude => 51.431244,
+            longitude => 0.166464,
+        };
+    }
+
+    return $self->next::method($s);
 }
 
 sub disable_resend_button { 1 }
@@ -41,6 +55,23 @@ sub category_change_force_resend {
 
     # Otherwise, okay if we're switching between Symology DBs, but not within
     return ($old =~ /^StreetLighting/ xor $new =~ /^StreetLighting/);
+}
+
+sub munge_report_new_category_list {
+    my ($self, $options, $contacts, $extras) = @_;
+
+    my $c = $self->{c};
+
+    if ( $c->user && $c->user->from_body && $c->user->from_body->id == $self->body->id && $self->feature('staff_url') ) {
+        for my $category ( keys %{ $self->feature('staff_url') } ) {
+            my $urls = $self->feature('staff_url')->{$category};
+            for my $extra ( @{ $extras->{$category} } ) {
+                if ($extra->{code} eq $urls->[0]) {
+                    $extra->{description} =~ s#$urls->[1]#$urls->[2]#s;
+                }
+            }
+        }
+    }
 }
 
 sub on_map_default_status { 'open' }
@@ -122,13 +153,18 @@ sub open311_extra_data_include {
         }
     }
 
+    # Add private comments field
+    push @$open311_only,
+        { name => 'private_comments', description => 'Private comments',
+          value => $row->get_extra_metadata('private_comments') || '' };
+
     return $open311_only;
 }
 
 sub admin_user_domain { 'bexley.gov.uk' }
 
 sub open311_post_send {
-    my ($self, $row, $h, $contact) = @_;
+    my ($self, $row, $h, $sender) = @_;
 
     # Check Open311 was successful
     return unless $row->external_id;
@@ -183,6 +219,7 @@ sub open311_post_send {
     }
 
     my @to;
+    my $contact = $sender->contact;
     my $p1_email_to_use = ($contact->email =~ /^Confirm/) ? $emails->{p1confirm} : $emails->{p1};
     push @to, email_list($p1_email_to_use, 'Bexley P1 email') if $p1_email;
     push @to, email_list($emails->{lighting}, 'FixMyStreet Bexley Street Lighting') if $lighting{$row->category};
@@ -194,11 +231,15 @@ sub open311_post_send {
     }
 
     return unless @to;
-    my $sender = FixMyStreet::SendReport::Email->new( to => \@to );
+    my $emailsender = FixMyStreet::SendReport::Email->new(
+        use_verp => 0,
+        use_replyto => 1,
+        to => \@to,
+    );
 
     $self->open311_config($row, $h, {}, $contact); # Populate NSGRef again if needed
 
-    $sender->send($row, $h);
+    $emailsender->send($row, $h);
 }
 
 sub email_list {
@@ -224,6 +265,10 @@ sub update_anonymous_message {
 
     my $staff = $update->user->from_body || $update->get_extra_metadata('is_body_user') || $update->get_extra_metadata('is_superuser');
     return sprintf('Posted anonymously by a non-staff user at %s', $t) if !$staff;
+}
+
+sub report_form_extras {
+    ( { name => 'private_comments' } )
 }
 
 1;

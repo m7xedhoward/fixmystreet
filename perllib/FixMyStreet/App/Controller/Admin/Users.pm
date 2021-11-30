@@ -219,24 +219,27 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
 
     $c->forward('/auth/check_csrf_token') if $c->get_param('submit');
 
-    if ( $c->get_param('submit') and $c->get_param('unban') ) {
+    my $submit = $c->get_param('submit');
+    if ( $submit and $c->get_param('unban') ) {
         $c->forward('unban', [ $user ]);
-    } elsif ( $c->get_param('submit') and $c->get_param('logout_everywhere') ) {
+    } elsif ( $submit and $c->get_param('banuser') ) {
+        $c->forward('ban');
+    } elsif ( $submit and $c->get_param('logout_everywhere') ) {
         $c->forward('user_logout_everywhere', [ $user ]);
-    } elsif ( $c->get_param('submit') and $c->get_param('anon_everywhere') ) {
+    } elsif ( $submit and $c->get_param('anon_everywhere') ) {
         $c->forward('user_anon_everywhere', [ $user ]);
-    } elsif ( $c->get_param('submit') and $c->get_param('hide_everywhere') ) {
+    } elsif ( $submit and $c->get_param('hide_everywhere') ) {
         $c->forward('user_hide_everywhere', [ $user ]);
-    } elsif ( $c->get_param('submit') and $c->get_param('remove_account') ) {
+    } elsif ( $submit and $c->get_param('remove_account') ) {
         $c->forward('user_remove_account', [ $user ]);
-    } elsif ( $c->get_param('submit') and $c->get_param('send_login_email') ) {
+    } elsif ( $submit and $c->get_param('send_login_email') ) {
         my $email = lc $c->get_param('email');
         my %args = ( email => $email );
         $args{user_id} = $user->id if $user->email ne $email || !$user->email_verified;
         $c->forward('send_login_email', [ \%args ]);
     } elsif ( $c->get_param('update_alerts') ) {
         $c->forward('update_alerts');
-    } elsif ( $c->get_param('submit') ) {
+    } elsif ( $submit ) {
 
         my $name = $c->get_param('name');
         my $email = lc $c->get_param('email');
@@ -256,7 +259,7 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
             $c->stash->{field_errors}->{email} = _('Please enter a valid email');
         }
 
-        if ($phone_v) {
+        if ($phone_v && ($phone ne $user->phone)) {
             my $parsed_phone = $c->forward('phone_check', [ $phone ]);
             $phone = $parsed_phone if $parsed_phone;
         }
@@ -273,6 +276,7 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
         my $existing_email_cobrand = $email_v && $c->cobrand->users->search($email_params)->first;
         my $existing_phone_cobrand = $phone_v && $c->cobrand->users->search($phone_params)->first;
         my $existing_user_cobrand = $existing_email_cobrand || $existing_phone_cobrand;
+
         if ($existing_phone_cobrand && $existing_email_cobrand && $existing_email_cobrand->id != $existing_phone_cobrand->id) {
             $c->stash->{field_errors}->{username} = _('User already exists');
         }
@@ -399,7 +403,7 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
             group => $_->groups,
         } } @live_contacts;
         $c->stash->{contacts} = \@all_contacts;
-        $c->forward('/report/stash_category_groups', [ \@all_contacts, 1 ]) if $c->cobrand->enable_category_groups;
+        $c->forward('/report/stash_category_groups', [ \@all_contacts, { combine_multiple => 1 } ]);
     }
 
     # this goes after in case we've delete any alerts
@@ -647,7 +651,7 @@ already in there and sets status_message accordingly.
 sub ban : Private {
     my ( $self, $c ) = @_;
 
-    my $user;
+    my $user = $c->stash->{user};
     if ($c->stash->{problem}) {
         $user = $c->stash->{problem}->user;
     } elsif ($c->stash->{update}) {
@@ -701,64 +705,6 @@ sub unban : Private {
         }
         $c->stash->{username_in_abuse} = 0;
     }
-}
-
-=head2 flag
-
-Sets the flag on a user
-
-=cut
-
-sub flag : Private {
-    my ( $self, $c ) = @_;
-
-    my $user;
-    if ($c->stash->{problem}) {
-        $user = $c->stash->{problem}->user;
-    } elsif ($c->stash->{update}) {
-        $user = $c->stash->{update}->user;
-    }
-
-    if ( !$user ) {
-        $c->stash->{status_message} = _('Could not find user');
-    } else {
-        $user->flagged(1);
-        $user->update;
-        $c->forward( '/admin/log_edit', [ $user->id, 'user', 'edit' ] );
-        $c->stash->{status_message} = _('User flagged');
-    }
-
-    $c->stash->{user_flagged} = 1;
-
-    return 1;
-}
-
-=head2 flag_remove
-
-Remove the flag on a user
-
-=cut
-
-sub flag_remove : Private {
-    my ( $self, $c ) = @_;
-
-    my $user;
-    if ($c->stash->{problem}) {
-        $user = $c->stash->{problem}->user;
-    } elsif ($c->stash->{update}) {
-        $user = $c->stash->{update}->user;
-    }
-
-    if ( !$user ) {
-        $c->stash->{status_message} = _('Could not find user');
-    } else {
-        $user->flagged(0);
-        $user->update;
-        $c->forward( '/admin/log_edit', [ $user->id, 'user', 'edit' ] );
-        $c->stash->{status_message} = _('User flag removed');
-    }
-
-    return 1;
 }
 
 

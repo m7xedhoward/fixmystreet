@@ -152,7 +152,7 @@ subtest 'Flytipping not on a road going to HE does not get recategorised' => sub
     $mech->get_ok('/report/new?latitude=51.615559&longitude=-0.556903&category=Flytipping');
     $mech->submit_form_ok({
         with_fields => {
-            single_body_only => 'Highways England',
+            single_body_only => 'National Highways',
             title => "Test Report",
             detail => 'Test report details.',
             category => 'Flytipping',
@@ -264,24 +264,24 @@ subtest 'extra CSV columns are present' => sub {
 
     my @rows = $mech->content_as_csv;
     is scalar @rows, 6, '1 (header) + 4 (reports) = 6 lines';
-    is scalar @{$rows[0]}, 21, '21 columns present';
+    is scalar @{$rows[0]}, 22, '22 columns present';
 
     is_deeply $rows[0],
         [
             'Report ID', 'Title', 'Detail', 'User Name', 'Category',
             'Created', 'Confirmed', 'Acknowledged', 'Fixed', 'Closed',
             'Status', 'Latitude', 'Longitude', 'Query', 'Ward',
-            'Easting', 'Northing', 'Report URL', 'Site Used',
+            'Easting', 'Northing', 'Report URL', 'Device Type', 'Site Used',
             'Reported As', 'Staff User',
         ],
         'Column headers look correct';
 
-    is $rows[1]->[20], '', 'Staff User is empty if not made on behalf of another user';
-    is $rows[2]->[20], $counciluser->email, 'Staff User is correct if made on behalf of another user';
-    is $rows[3]->[20], '', 'Staff User is empty if not made on behalf of another user';
+    is $rows[1]->[21], '', 'Staff User is empty if not made on behalf of another user';
+    is $rows[2]->[21], $counciluser->email, 'Staff User is correct if made on behalf of another user';
+    is $rows[3]->[21], '', 'Staff User is empty if not made on behalf of another user';
 
     $mech->create_comment_for_problem($report, $counciluser, 'Staff User', 'Some update text', 'f', 'confirmed', undef, {
-        extra => { contributed_as => 'body' }});
+        extra => { contributed_as => 'body', contributed_by => $counciluser->id }});
     $mech->create_comment_for_problem($report, $counciluser, 'Other User', 'Some update text', 'f', 'confirmed', undef, {
         extra => { contributed_as => 'another_user', contributed_by => $counciluser->id }});
 
@@ -297,8 +297,42 @@ subtest 'extra CSV columns are present' => sub {
         ],
         'Column headers look correct';
 
-    is $rows[1]->[8], '', 'Staff User is empty if not made on behalf of another user';
+    is $rows[1]->[8], $counciluser->email, 'Staff User is correct if made on behalf of body';
     is $rows[2]->[8], $counciluser->email, 'Staff User is correct if made on behalf of another user';
+};
+
+subtest 'old district council names are now just "areas"' => sub {
+
+    my %points = (
+       'Aylesbury Vale' => [
+           [ 51.822364, -0.826409 ], # AVDC offices
+           [ 51.995, -0.986 ], # Buckingham
+           [ 51.940, -0.887 ], # Winslow
+       ],
+        'Chiltern' => [
+           [ 51.615559, -0.556903, ],
+        ],
+        'South Bucks' => [
+            [ 51.563, -0.499 ], # Denham
+            [ 51.611, -0.644 ], # Beaconsfield Railway Station
+        ],
+         'Wycombe' => [
+             [ 51.628661, -0.748238 ], # High Wycombe
+             [ 51.566667, -0.766667 ], # Marlow
+         ],
+    );
+
+    for my $area (sort keys %points) {
+        for my $loc (@{$points{$area}}) {
+            $mech->get("/alert/list?latitude=$loc->[0];longitude=$loc->[1]");
+            $mech->content_contains("$area area");
+            $mech->content_lacks("$area District Council");
+            $mech->content_lacks("ward, $area District Council");
+            $mech->content_lacks('County Council');
+            $mech->content_contains('Buckinghamshire Council');
+        }
+    }
+
 };
 
 };

@@ -101,7 +101,7 @@ has filename => ( is => 'rw', isa => Str, lazy => 1, default => sub {
         $self->on_updates ? ('updates') : (),
         map {
             my $value = $where{$_};
-            (my $nosp = $value || '') =~ s/ /-/g;
+            (my $nosp = $value || '') =~ s/[ \/\\]/-/g;
             (defined $value and length $value) ? ($_, $nosp) : ()
         } sort keys %where
 });
@@ -208,6 +208,7 @@ sub _csv_parameters_problems {
         'Easting',
         'Northing',
         'Report URL',
+        'Device Type',
         'Site Used',
         'Reported As',
     ]);
@@ -230,6 +231,7 @@ sub _csv_parameters_problems {
         'local_coords_x',
         'local_coords_y',
         'url',
+        'device_type',
         'site_used',
         'reported_as',
     ]);
@@ -263,7 +265,7 @@ sub generate_csv {
             ? '(anonymous)' : $obj->name;
 
         if ($asked_for{acknowledged}) {
-            for my $comment ($obj->comments) {
+            for my $comment ($obj->comments->search(undef, { order_by => ['confirmed', 'id'] })) {
                 my $problem_state = $comment->problem_state or next;
                 next unless $comment->state eq 'confirmed';
                 next if $problem_state eq 'confirmed';
@@ -302,7 +304,10 @@ sub generate_csv {
         my $base = $self->cobrand->base_url_for_report($obj->can('problem') ? $obj->problem : $obj);
         $hashref->{url} = join '', $base, $obj->url;
 
-        $hashref->{site_used} = $obj->can('service') ? ($obj->service || $obj->cobrand) : $obj->cobrand;
+        if ($asked_for{device_type}) {
+            $hashref->{device_type} = $obj->service || 'website';
+        }
+        $hashref->{site_used} = $obj->cobrand;
 
         $hashref->{reported_as} = $obj->get_extra_metadata('contributed_as') || '';
 

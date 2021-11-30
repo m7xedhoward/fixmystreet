@@ -4,10 +4,12 @@ use parent 'FixMyStreet::Cobrand::Whitelabel';
 use strict;
 use warnings;
 
+use Path::Tiny;
 use Moo;
 with 'FixMyStreet::Roles::ConfirmOpen311';
 with 'FixMyStreet::Roles::ConfirmValidation';
 with 'FixMyStreet::Roles::BoroughEmails';
+use SUPER;
 
 sub council_area_id { return 2217; }
 sub council_area { return 'Buckinghamshire'; }
@@ -33,10 +35,16 @@ sub on_map_default_status { 'open' }
 
 sub pin_colour {
     my ( $self, $p, $context ) = @_;
+    # updated to match Oxon CC
     return 'grey' if $p->state eq 'not responsible' || !$self->owns_problem( $p );
-    return 'green' if $p->is_fixed || $p->is_closed;
-    return 'red' if $p->state eq 'confirmed';
-    return 'yellow';
+    return 'grey' if $p->is_closed;
+    return 'green' if $p->is_fixed;
+    return 'yellow' if $p->state eq 'confirmed';
+    return 'orange'; # all the other `open_states` like "in progress"
+}
+
+sub path_to_pin_icons {
+    return '/cobrands/oxfordshire/images/';
 }
 
 sub admin_user_domain { ( 'buckscc.gov.uk', 'buckinghamshire.gov.uk' ) }
@@ -47,11 +55,27 @@ sub send_questionnaires {
 
 sub open311_extra_data_exclude { [ 'road-placement' ] }
 
+sub open311_pre_send {
+    my ($self, $row, $open311) = @_;
+    if ($row->category eq 'Claim') {
+        if ($row->get_extra_metadata('fault_fixed') eq 'Yes') {
+            # We want to send to Confirm, but with slightly altered information
+            $row->update_extra_field({ name => 'title', value => $row->get_extra_metadata('direction') }); # XXX See doc note
+            $row->update_extra_field({ name => 'description', value => $row->get_extra_metadata('describe_cause') });
+        } else {
+            # We do not want to send to Confirm, only email
+            return 'SKIP';
+        }
+    }
+}
+
 sub open311_post_send {
     my ($self, $row, $h) = @_;
 
-    # Check Open311 was successful
-    return unless $row->external_id;
+    # Check Open311 was successful (or a non-Open311 Claim)
+    my $non_open311_claim = $row->category eq 'Claim' && $row->get_extra_metadata('fault_fixed') ne 'Yes';
+    return unless $row->external_id || $non_open311_claim;
+    return if $row->get_extra_metadata('extra_email_sent');
 
     # For certain categories, send an email also
     my $emails = $self->feature('open311_email');
@@ -60,12 +84,15 @@ sub open311_post_send {
         'Blocked drain' => [ $emails->{flood}, "Flood Management" ],
         'Ditch issue' => [ $emails->{flood}, "Flood Management" ],
         'Flooded subway' => [ $emails->{flood}, "Flood Management" ],
+        'Claim' => [ $emails->{claim}, 'TfB' ],
     };
     my $dest = $addresses->{$row->category};
     return unless $dest;
 
     my $sender = FixMyStreet::SendReport::Email->new( to => [ $dest ] );
-    $sender->send($row, $h);
+    if (!$sender->send($row, $h)) {
+        $row->set_extra_metadata(extra_email_sent => 1);
+    }
 }
 
 sub open311_config_updates {
@@ -119,27 +146,18 @@ sub filter_report_description {
     return $description;
 }
 
-sub map_type { 'Buckinghamshire' }
-
-sub default_map_zoom { 3 }
+sub default_map_zoom { 4 }
 
 sub _dashboard_export_add_columns {
     my ($self, $csv) = @_;
 
     $csv->add_csv_columns( staff_user => 'Staff User' );
 
-    # All staff users, for contributed_by lookup
-    my @user_ids = FixMyStreet::DB->resultset('User')->search(
-        { from_body => $self->body->id },
-        { columns => [ 'id', 'email', ] })->all;
-    my %user_lookup = map { $_->id => $_->email } @user_ids;
+    my $user_lookup = $self->csv_staff_users;
 
     $csv->csv_extra_data(sub {
         my $report = shift;
-        my $staff_user = '';
-        if (my $contributed_by = $report->get_extra_metadata('contributed_by')) {
-            $staff_user = $user_lookup{$contributed_by};
-        }
+        my $staff_user = $self->csv_staff_user_lookup($report->get_extra_metadata('contributed_by'), $user_lookup);
         return {
             staff_user => $staff_user,
         };
@@ -378,6 +396,12 @@ sub categories_restriction {
     return $rs->search( { category => { '!=', 'Flytipping (off-road)'} } );
 }
 
+sub munge_report_new_contacts {
+    my ($self, $contacts) = @_;
+    @$contacts = grep { $_->category ne 'Claim' } @$contacts;
+    $self->SUPER::munge_report_new_contacts($contacts);
+}
+
 sub lookup_site_code_config { {
     buffer => 200, # metres
     url => "https://tilma.mysociety.org/mapserver/bucks",
@@ -396,8 +420,136 @@ sub lookup_site_code_config { {
     }
 } }
 
+sub _lookup_site_name {
+    my $self = shift;
+    my $row = shift;
+
+    my $cfg = {
+        buffer => 200,
+        url => "https://tilma.mysociety.org/mapserver/bucks",
+        srsname => "urn:ogc:def:crs:EPSG::27700",
+        typename => "Whole_Street",
+        accept_feature => sub { 1 }
+    };
+    my ($x, $y) = $row->local_coords;
+    my $features = $self->_fetch_features($cfg, $x, $y);
+    return $self->_nearest_feature($cfg, $x, $y, $features);
+}
+
 around 'munge_sendreport_params' => sub {
     my ($orig, $self, $row, $h, $params) = @_;
+
+    if ($row->category eq 'Claim') {
+        # Update subject
+        my $type = $row->get_extra_metadata('what');
+        my $name = $row->name;
+        my $road = $self->_lookup_site_name($row);
+        my $site_name = $road->{properties}->{site_name};
+        $site_name =~ s/([\w']+)/\u\L$1/g;
+        my $area_name = $road->{properties}->{area_name};
+        $area_name =~ s/([\w']+)/\u\L$1/g;
+        my $external_id = $row->external_id || $row->get_extra_metadata('report_id') || '(no ID)';
+        my $subject = "New claim - $type - $name - $external_id - $site_name, $area_name";
+        $params->{Subject} = $subject;
+
+        my $user = $self->body->comment_user;
+        if ( $user ) {
+            # Attach auto-response template if present
+            my $template = $row->response_templates->search({ 'me.state' => $row->state })->first;
+            my $description = $template->text if $template;
+            if ( $description ) {
+                my $updates = Open311::GetServiceRequestUpdates->new(
+                    system_user => $user,
+                    current_body => $self->body,
+                    blank_updates_permitted => 1,
+                );
+
+                my $request = {
+                    service_request_id => $row->id,
+                    update_id => 'auto-internal',
+                    # Add a second so it is definitely later than problem confirmed timestamp,
+                    # which uses current_timestamp (and thus microseconds) whilst this update
+                    # is rounded down to the nearest second
+                    comment_time => DateTime->now->add( seconds => 1 ),
+                    status => 'open',
+                    description => $description,
+                };
+                my $update = $updates->process_update($request, $row);
+                if ($update) {
+                    $h->{update} = {
+                        item_text => $update->text,
+                        item_extra => $update->get_column('extra'),
+                    };
+
+                    # Stop any alerts being sent out about this update as included here.
+                    my @alerts = FixMyStreet::DB->resultset('Alert')->search({
+                        alert_type => 'new_updates',
+                        parameter => $row->id,
+                        confirmed => 1,
+                    });
+                    for my $alert (@alerts) {
+                        my $alerts_sent = FixMyStreet::DB->resultset('AlertSent')->find_or_create({
+                            alert_id  => $alert->id,
+                            parameter => $update->id,
+                        });
+                    }
+                }
+            }
+        }
+
+        # Attach photos and documents
+        my @photos = grep { $_ } (
+            $row->photo,
+            $row->get_extra_metadata('vehicle_photos'),
+            $row->get_extra_metadata('property_photos'),
+        );
+        my $photoset = FixMyStreet::App::Model::PhotoSet->new({
+            db_data => join(',', @photos),
+        });
+
+        my $num = $photoset->num_images;
+        my $id = $row->id;
+        my @attachments;
+        foreach (0..$num-1) {
+            my $image = $photoset->get_raw_image($_);
+            push @attachments, {
+                body => $image->{data},
+                attributes => {
+                    filename => "$id.$_." . $image->{extension},
+                    content_type => $image->{content_type},
+                    encoding => 'base64', # quoted-printable ends up with newlines corrupting binary data
+                    name => "$id.$_." . $image->{extension},
+                },
+            };
+        }
+
+        my @files = grep { $_ } (
+            $row->get_extra_metadata('v5'),
+            $row->get_extra_metadata('vehicle_receipts'),
+            $row->get_extra_metadata('tyre_receipts'),
+            $row->get_extra_metadata('property_insurance'),
+            $row->get_extra_metadata('property_invoices'),
+        );
+        foreach (@files) {
+            my $filename = $_->{filenames}[0];
+            my $id = $_->{files};
+            my $dir = FixMyStreet->config('PHOTO_STORAGE_OPTIONS')->{UPLOAD_DIR};
+            $dir = path($dir, "claims_files")->absolute(FixMyStreet->path_to());
+            my $data = path($dir, $id)->slurp_raw;
+            push @attachments, {
+                body => $data,
+                attributes => {
+                    filename => $filename,
+                    #content_type => $image->{content_type},
+                    encoding => 'base64', # quoted-printable ends up with newlines corrupting binary data
+                    name => $filename,
+                },
+            };
+        }
+
+        $params->{_attachments_} = \@attachments;
+        return;
+    }
 
     # The district areas don't exist in MapIt past generation 36, so look up
     # what district this report would have been in and temporarily override
@@ -414,5 +566,21 @@ around 'munge_sendreport_params' => sub {
 
     $row->areas($original_areas);
 };
+
+sub council_rss_alert_options {
+    my ($self, @args) = @_;
+    my ($options) = super();
+
+    # rename old district councils to 'area' and remove 'ward' from their wards
+    # remove 'County' from Bucks Council name
+    for my $area (@$options) {
+        for my $key (qw(rss_text text)) {
+            $area->{$key} =~ s/District Council/area/ && $area->{$key} =~ s/ ward//;
+            $area->{$key} =~ s/ County//;
+        }
+    }
+
+    return ($options);
+}
 
 1;

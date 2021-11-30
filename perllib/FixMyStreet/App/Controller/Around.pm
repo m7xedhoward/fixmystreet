@@ -209,12 +209,12 @@ and that they are in UK (if we are in UK).
 =cut
 
 sub check_location_is_acceptable : Private {
-    my ( $self, $c ) = @_;
+    my ( $self, $c, $prefetched_all_areas ) = @_;
 
     # check that there are areas that can accept this location
     $c->stash->{area_check_action} = 'submit_problem';
     $c->stash->{remove_redundant_areas} = 1;
-    return $c->forward('/council/load_and_check_areas');
+    return $c->forward('/council/load_and_check_areas', [ $prefetched_all_areas ]);
 }
 
 =head2 check_and_stash_category
@@ -243,7 +243,31 @@ sub check_and_stash_category : Private {
     my $where = { body_id => [ keys %bodies ], };
     $c->cobrand->call_hook('munge_around_category_where', $where);
 
-    my @categories = $c->model('DB::Contact')->not_deleted->search(
+    my $rs = $c->model('DB::Contact');
+    if ($c->user_exists) {
+        if ($c->user->is_superuser) {
+            $rs = $rs->not_deleted_admin;
+        } elsif ($c->user->has_body_permission_to('report_inspect') ||
+                 $c->user->has_body_permission_to('report_mark_private')) {
+            $where = {
+                -or => [
+                    {
+                        body_id => [ keys %bodies ],
+                        state => { -not_in => [ "deleted", "staff" ] },
+                    },
+                    {
+                        body_id => $c->user->from_body->id,
+                        state => { -not_in => [ "deleted" ] },
+                    }
+                ],
+            };
+        } else {
+            $rs = $rs->not_deleted;
+        }
+    } else {
+        $rs = $rs->not_deleted;
+    }
+    my @categories = $rs->search(
         $where,
         {
             columns => [ 'category', 'extra' ],
@@ -255,7 +279,7 @@ sub check_and_stash_category : Private {
     @categories = grep { !$seen{$_->category_display}++ } @categories;
     $c->stash->{filter_categories} = \@categories;
     my %categories_mapped = map { $_->category => 1 } @categories;
-    $c->forward('/report/stash_category_groups', [ \@categories ]) if $c->cobrand->enable_category_groups;
+    $c->forward('/report/stash_category_groups', [ \@categories ]);
 
     my $categories = [ $c->get_param_list('filter_category', 1) ];
     my %valid_categories = map { $_ => 1 } grep { $_ && $categories_mapped{$_} } @$categories;
@@ -280,7 +304,7 @@ sub map_features : Private {
     # Allow the cobrand to add in any additional query parameters
     my $extra_params = $c->cobrand->call_hook('display_location_extra_params');
 
-    my ( $on_map, $nearby ) =
+    my ( $on_map, $nearby, $distance ) =
       FixMyStreet::Map::map_features(
         $c, %$extra,
         categories => [ keys %{$c->stash->{filter_category}} ],
@@ -290,17 +314,23 @@ sub map_features : Private {
       );
 
     my @pins;
+    my $extra_pins;
     unless ($c->get_param('no_pins')) {
         @pins = map {
             # Here we might have a DB::Problem or a DB::Result::Nearby, we always want the problem.
             my $p = (ref $_ eq 'FixMyStreet::DB::Result::Nearby') ? $_->problem : $_;
             $p->pin_data('around');
         } @$on_map, @$nearby;
+
+        $extra_pins = $c->cobrand->call_hook('extra_around_pins', $extra->{bbox});
+        @pins = (@pins, @$extra_pins) if $extra_pins;
     }
 
     $c->stash->{pins} = \@pins;
+    $c->stash->{extra_pins} = $extra_pins;
     $c->stash->{on_map} = $on_map;
     $c->stash->{around_map} = $nearby;
+    $c->stash->{distance} = $distance if $distance; # So Gaze not called again
 }
 
 =head2 ajax
@@ -430,7 +460,20 @@ sub lookup_by_ref : Private {
             external_id => $ref
         ];
 
-    my $problems = $c->cobrand->problems->search({ non_public => 0, -or => $criteria });
+    my $params = {};
+    my $rs = $c->cobrand->problems;
+    $rs->non_public_if_possible($params, $c);
+    if ($params->{"-or"}) {
+        $params = {
+            -and => [
+                -or => $criteria,
+                -or => $params->{"-or"},
+            ]
+        };
+    } else {
+        $params->{"-or"} = $criteria;
+    }
+    my $problems = $rs->search($params);
 
     my $count = try {
         $problems->count;

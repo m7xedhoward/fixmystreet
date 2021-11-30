@@ -2,6 +2,10 @@ use Test::MockModule;
 use FixMyStreet::TestMech;
 my $mech = FixMyStreet::TestMech->new;
 
+# disable info logs for this test run
+FixMyStreet::App->log->disable('info');
+END { FixMyStreet::App->log->enable('info'); }
+
 my $cobrand = Test::MockModule->new('FixMyStreet::Cobrand::BathNES');
 $cobrand->mock('area_types', sub { [ 'UTA' ] });
 
@@ -36,6 +40,7 @@ $mech->create_problems_for_body(1, $body->id, 'Title', {
     areas => ",2651,", category => 'Traffic lights', cobrand => 'bathnes',
     user => $counciluser, extra => {
         contributed_as => 'body',
+        contributed_by => $counciluser->id,
     }
 });
 $mech->create_problems_for_body(1, $body->id, 'Title', {
@@ -58,7 +63,6 @@ FixMyStreet::override_config {
 }, sub {
 
 subtest 'cobrand displays council name' => sub {
-    ok $mech->host("bathnes.fixmystreet.com"), "change host to bathnes";
     $mech->get_ok('/');
     $mech->content_like( qr/Bath and North East Somerset\b/ );
 };
@@ -84,7 +88,7 @@ subtest 'extra CSV columns are absent if permission not granted' => sub {
     my @rows = $mech->content_as_csv;
     is scalar @rows, 5, '1 (header) + 4 (reports) = 5 lines';
 
-    is scalar @{$rows[0]}, 20, '20 columns present';
+    is scalar @{$rows[0]}, 21, '21 columns present';
 
     is_deeply $rows[0],
         [
@@ -106,6 +110,7 @@ subtest 'extra CSV columns are absent if permission not granted' => sub {
             'Easting',
             'Northing',
             'Report URL',
+            'Device Type',
             'Site Used',
             'Reported As',
         ],
@@ -140,7 +145,7 @@ subtest 'extra CSV columns are present if permission granted' => sub {
     my @rows = $mech->content_as_csv;
     is scalar @rows, 5, '1 (header) + 4 (reports) = 5 lines';
 
-    is scalar @{$rows[0]}, 24, '24 columns present';
+    is scalar @{$rows[0]}, 25, '25 columns present';
 
     is_deeply $rows[0],
         [
@@ -162,6 +167,7 @@ subtest 'extra CSV columns are present if permission granted' => sub {
             'Easting',
             'Northing',
             'Report URL',
+            'Device Type',
             'Site Used',
             'Reported As',
             'User Email',
@@ -171,33 +177,37 @@ subtest 'extra CSV columns are present if permission granted' => sub {
         ],
         'Column headers look correct';
 
-    is $rows[1]->[18], 'iOS', 'Site Used shows whether report made via app';
-    is $rows[1]->[19], '', 'Reported As is empty if not made on behalf of another user/body';
-    is $rows[1]->[20], $normaluser->email, 'User email is correct';
-    is $rows[1]->[21], '+447123456789', 'User phone number is correct';
-    is $rows[1]->[22], '', 'Staff User is empty if not made on behalf of another user';
-    is $rows[1]->[23], 'width = 10cm; depth = 25cm', 'Attribute Data is correct';
+    is $rows[1]->[18], 'iOS', 'Device Type shows whether report made via app';
+    is $rows[1]->[19], 'fixmystreet', 'Site Used shows cobrand';
+    is $rows[1]->[20], '', 'Reported As is empty if not made on behalf of another user/body';
+    is $rows[1]->[21], $normaluser->email, 'User email is correct';
+    is $rows[1]->[22], '+447123456789', 'User phone number is correct';
+    is $rows[1]->[23], '', 'Staff User is empty if not made on behalf of another user';
+    is $rows[1]->[24], 'width = 10cm; depth = 25cm', 'Attribute Data is correct';
 
-    is $rows[2]->[18], 'bathnes', 'Site Used shows correct cobrand';
-    is $rows[2]->[19], 'body', 'Reported As is correct if made on behalf of body';
-    is $rows[2]->[20], $counciluser->email, 'User email is correct';
-    is $rows[2]->[21], '', 'User phone number is correct';
-    is $rows[2]->[22], '', 'Staff User is empty if not made on behalf of another user';
-    is $rows[2]->[23], '', 'Attribute Data is correct';
+    is $rows[2]->[18], 'website', 'No device type';
+    is $rows[2]->[19], 'bathnes', 'Site Used shows correct cobrand';
+    is $rows[2]->[20], 'body', 'Reported As is correct if made on behalf of body';
+    is $rows[2]->[21], $counciluser->email, 'User email is correct';
+    is $rows[2]->[22], '', 'User phone number is correct';
+    is $rows[2]->[23], $counciluser->email, 'Staff User is correct is made on behalf of body';
+    is $rows[2]->[24], '', 'Attribute Data is correct';
 
-    is $rows[3]->[18], 'bathnes', 'Site Used shows correct cobrand';
-    is $rows[3]->[19], 'another_user', 'Reported As is set if reported on behalf of another user';
-    is $rows[3]->[20], $normaluser->email, 'User email is correct';
-    is $rows[3]->[21], '+447123456789', 'User phone number is correct';
-    is $rows[3]->[22], $counciluser->email, 'Staff User is correct if made on behalf of another user';
-    is $rows[3]->[23], '', 'Attribute Data is correct';
+    is $rows[3]->[18], 'website', 'No device type';
+    is $rows[3]->[19], 'bathnes', 'Site Used shows correct cobrand';
+    is $rows[3]->[20], 'another_user', 'Reported As is set if reported on behalf of another user';
+    is $rows[3]->[21], $normaluser->email, 'User email is correct';
+    is $rows[3]->[22], '+447123456789', 'User phone number is correct';
+    is $rows[3]->[23], $counciluser->email, 'Staff User is correct if made on behalf of another user';
+    is $rows[3]->[24], '', 'Attribute Data is correct';
 
-    is $rows[4]->[18], 'bathnes', 'Site Used shows correct cobrand';
-    is $rows[4]->[19], 'anonymous_user', 'Reported As is set if reported on behalf of another user';
-    is $rows[4]->[20], $counciluser->email, 'User email is correct';
-    is $rows[4]->[21], '', 'User phone number is correct';
-    is $rows[4]->[22], '', 'Staff User is empty if not made on behalf of another user';
-    is $rows[4]->[23], '', 'Attribute Data is correct';
+    is $rows[4]->[18], 'website', 'No device type';
+    is $rows[4]->[19], 'bathnes', 'Site Used shows correct cobrand';
+    is $rows[4]->[20], 'anonymous_user', 'Reported As is set if reported on behalf of another user';
+    is $rows[4]->[21], $counciluser->email, 'User email is correct';
+    is $rows[4]->[22], '', 'User phone number is correct';
+    is $rows[4]->[23], '', 'Staff User is empty if not made on behalf of another user';
+    is $rows[4]->[24], '', 'Attribute Data is correct';
 
     $mech->get_ok('/dashboard?export=1&updates=1');
 
@@ -213,7 +223,38 @@ subtest 'extra CSV columns are present if permission granted' => sub {
         'Column headers look correct';
 };
 
+subtest 'report a problem link post-report is not location-specific' => sub {
+        $mech->log_in_ok( $normaluser->email );
+        $mech->get_ok('/report/new?longitude=-2.364050&latitude=51.386269');
+        $mech->submit_form_ok(
+            {
+                button      => 'submit_register',
+                with_fields => {
+                    title         => 'Test',
+                    detail        => 'Detail',
+                    photo1        => '',
+                    name          => $normaluser->name,
+                    may_show_name => '1',
+                    phone         => '',
+                    category      => 'Other',
+                }
+            },
+            'submit report form ok'
+        );
+        $mech->content_like(qr/Your reference for this report is (\d+),/);
+        $mech->base_like(qr(/report/new$), 'expected redirect back to /report/new');
 
+        my $tree = HTML::TreeBuilder->new_from_content($mech->content());
+        my $report_link = $tree->look_down(
+            '_tag' => 'li',
+            'class' => 'navigation-primary-list__item',
+        )->look_down(
+            '_tag' => 'a',
+            'class' => 'report-a-problem-btn'
+        );
+        is ($report_link->as_text, 'Report a problem', 'RAP link has correct text');
+        is ($report_link->attr('href'), '/', 'report link href should be /');
+    }
 };
 
 subtest 'check cobrand correctly reset on each request' => sub {

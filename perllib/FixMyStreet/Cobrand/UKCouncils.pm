@@ -21,6 +21,8 @@ sub suggest_duplicates {
     return $self->feature('suggest_duplicates');
 }
 
+sub sms_authentication { shift->feature('sms_authentication') }
+
 sub path_to_web_templates {
     my $self = shift;
     return [
@@ -49,10 +51,10 @@ sub restriction {
 }
 
 # UK cobrands assume that each MapIt area ID maps both ways with one
-# body. Except TfL and Highways England.
+# body. Except TfL and National Highways.
 sub body {
     my $self = shift;
-    my $body = FixMyStreet::DB->resultset('Body')->for_areas($self->council_area_id)->search({ name => { 'not_in', ['TfL', 'Highways England'] } })->first;
+    my $body = FixMyStreet::DB->resultset('Body')->for_areas($self->council_area_id)->search({ name => { 'not_in', ['TfL', 'National Highways', 'Environment Agency'] } })->first;
     return $body;
 }
 
@@ -240,7 +242,7 @@ sub owns_problem {
         @bodies = values %{$report->bodies};
     }
     # Want to ignore the TfL body that covers London councils, and HE that is all England
-    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|Highways England/ } @bodies;
+    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|National Highways/ } @bodies;
     return $areas{$self->council_area_id} ? 1 : undef;
 }
 
@@ -320,14 +322,20 @@ sub munge_report_new_bodies {
         $tfl->munge_surrounding_london($bodies);
     }
 
-    if ( $bodies{'Highways England'} ) {
+    if ( $bodies{'National Highways'} ) {
         my $c = $self->{c};
         my $he = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $c });
         my $on_he_road = $c->stash->{on_he_road} = $he->report_new_is_on_he_road;
 
         if (!$on_he_road) {
-            %$bodies = map { $_->id => $_ } grep { $_->name ne 'Highways England' } values %$bodies;
+            %$bodies = map { $_->id => $_ } grep { $_->name ne 'National Highways' } values %$bodies;
         }
+    }
+
+    # Environment agency added with odour category for FixmyStreet
+    # in all England areas, but should not show for cobrands
+    if ( $bodies{'Environment Agency'} ) {
+        %$bodies = map { $_->id => $_ } grep { $_->name ne 'Environment Agency' } values %$bodies;
     }
 }
 
@@ -472,6 +480,16 @@ sub contact_email {
     return $self->feature('contact_email') || $self->next::method();
 }
 
+sub do_not_reply_email {
+    my $self = shift;
+    return $self->feature('do_not_reply_email') || $self->next::method();
+}
+
+sub verp_email_domain {
+    my $self = shift;
+    return $self->feature('verp_email_domain');
+}
+
 # Allow cobrands to disallow updates on some things.
 # Note this only ever locks down more than the default.
 sub updates_disallowed {
@@ -498,6 +516,21 @@ sub updates_disallowed {
 
     return $self->next::method(@_);
 }
+
+# Report if cobrand denies updates by user
+sub deny_updates_by_user {
+    my ($self, $row) = @_;
+    my $cfg = $self->feature('updates_allowed') || '';
+    if ($cfg eq 'none' || $cfg eq 'staff') {
+        return 1;
+    } elsif ($cfg eq 'reporter-open' && !$row->is_open) {
+        return 1;
+    } elsif ($cfg eq 'open' && !$row->is_open) {
+        return 1;
+    } else {
+        return;
+    }
+};
 
 sub extra_contact_validation {
     my $self = shift;
@@ -538,6 +571,27 @@ sub _distanceToLine {
     my $fx = $start->[0] + $along * $dx;
     my $fy = $start->[1] + $along * $dy;
     return sqrt( (($x - $fx) ** 2) + (($y - $fy) ** 2) );
+}
+
+# Do a manual prefetch of all staff users for contributed_by lookup
+sub csv_staff_users {
+    my $self = shift;
+
+    my @user_ids = FixMyStreet::DB->resultset('User')->search(
+        { from_body => $self->body->id },
+        { columns => [ 'id', 'email' ] })->all;
+
+    my %user_lookup = map { $_->id => $_->email } @user_ids;
+    return \%user_lookup;
+}
+
+sub csv_staff_user_lookup {
+    my ($self, $contributed_by, $user_lookup) = @_;
+    return '' unless $contributed_by;
+    return $user_lookup->{$contributed_by} //= do {
+        my $user = FixMyStreet::DB->resultset('User')->find({ id => $contributed_by });
+        $user ? $user->email : '';
+    };
 }
 
 1;

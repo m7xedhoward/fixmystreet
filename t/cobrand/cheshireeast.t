@@ -27,6 +27,8 @@ $cobrand->mock('_fetch_features', sub {
     return [];
 });
 
+my $staff_user = $mech->create_user_ok('astaffuser@example.com', name => 'A staff user', from_body => $body);
+
 use_ok 'FixMyStreet::Cobrand::CheshireEast';
 
 FixMyStreet::override_config {
@@ -44,6 +46,10 @@ FixMyStreet::override_config {
 my @reports = $mech->create_problems_for_body( 1, $body->id, 'Test', {
     category => 'Zebra Crossing',
     photo => '74e3362283b6ef0c48686fb0e161da4043bbcc97.jpeg,74e3362283b6ef0c48686fb0e161da4043bbcc97.jpeg',
+    extra => {
+        contributed_as => 'another_user',
+        contributed_by => $staff_user->id,
+    },
 });
 my $report = $reports[0];
 
@@ -75,26 +81,49 @@ FixMyStreet::override_config {
     };
 
     subtest 'testing special Open311 behaviour', sub {
-        my $test_data = FixMyStreet::Script::Reports::send();
+        my $data = {
+            resourceSets => [ {
+                resources => [ {
+                    name => 'Constitution Hill',
+                    address => {
+                        addressLine => 'Constitution Hill',
+                        locality => 'London',
+                        'formattedAddress' => 'Constitution Hill, London',
+                    }
+                } ],
+            } ],
+        };
+        $report->geocode($data);
+        $report->update;
+
+        FixMyStreet::Script::Reports::send();
         $report->discard_changes;
         ok $report->whensent, 'Report marked as sent';
         is $report->send_method_used, 'Open311', 'Report sent via Open311';
         is $report->external_id, 248, 'Report has right external ID';
+        is $report->detail, 'Test Test 1 for ' . $body->id . ' Detail', 'Report detail is unchanged';
 
-        my $req = $test_data->{test_req_used};
+        my $req = Open311->test_req_used;
         my $c = CGI::Simple->new($req->content);
         is $c->param('attribute[title]'), 'Test Test 1 for ' . $body->id, 'Request had correct title';
+        my $expected_desc = 'Test Test 1 for ' . $body->id . " Detail\n\n(this report was made by <" . $staff_user->email . "> (" . $staff_user->name .") on behalf of the user)";
+        (my $c_description = $c->param('attribute[description]')) =~ s/\r\n/\n/g;
+        is $c_description, $expected_desc, 'Request had correct description attribute';
+        ($c_description = $c->param('description')) =~ s/\r\n/\n/g;
+        is $c_description, "Test Test 1 for " . $body->id . "\n\n$expected_desc\n\nhttp://www.example.org/report/" . $report->id . "\n", 'Request had correct description';
+
         is_deeply [ $c->param('media_url') ], [
             'http://www.example.org/photo/' . $report->id . '.0.full.jpeg?74e33622',
             'http://www.example.org/photo/' . $report->id . '.1.full.jpeg?74e33622',
         ], 'Request had multiple photos';
 
+        is $c->param('attribute[closest_address]'), 'Constitution Hill, London', 'closest address correctly set';
     };
 
     subtest 'testing reference numbers shown' => sub {
         $mech->get_ok('/report/' . $report->id);
         $mech->content_contains('Council ref:&nbsp;' . $report->id);
-        FixMyStreet::Script::Alerts::send();
+        FixMyStreet::Script::Alerts::send_updates();
         like $mech->get_text_body_from_email, qr/reference number is @{[$report->id]}/;
     };
 
@@ -112,7 +141,7 @@ FixMyStreet::override_config {
         }});
         my $report = FixMyStreet::DB->resultset('Problem')->search(undef, { order_by => { -desc => 'id' } })->first;
         my $report_id = $report->id;
-        $mech->content_contains('0300 123 5020');
+        $mech->content_contains('0300 123 5011');
         $mech->content_like(qr/quoting your reference number $report_id/);
     };
 

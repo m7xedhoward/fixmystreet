@@ -27,7 +27,7 @@ var defaults = {
     min_resolution: 0.0001,
     srsName: "EPSG:3857",
     strategy_class: OpenLayers.Strategy.FixMyStreet,
-    body: 'Highways England'
+    body: 'National Highways'
 };
 
 fixmystreet.assets.add(defaults, {
@@ -59,17 +59,18 @@ fixmystreet.assets.add(defaults, {
     nearest_radius: 50,
     asset_type: 'road',
     no_asset_msg_id: '#js-not-he-road',
+    no_asset_msgs_class: '.js-roads-he',
     actions: {
         found: function(layer, feature) {
             // If the road is a DBFO road then we want to show the not found message.
             fixmystreet.message_controller.road_found(layer, feature, function(feature) {
                 if (feature.attributes.area_name.indexOf('DBFO') === -1) {
                     $('#js-top-message').show();
-                    $('#form_category_row').show();
+                    $('.js-reporting-page--category').removeClass('hidden-js');
                     return true;
                 } else {
                     $('#js-top-message').hide();
-                    $('#form_category_row').hide();
+                    $('.js-reporting-page--category').addClass('hidden-js');
                     return false;
                 }
             }, '#js-dbfo-road');
@@ -77,7 +78,7 @@ fixmystreet.assets.add(defaults, {
         not_found: function(layer) {
           fixmystreet.message_controller.road_not_found(layer);
           $('#js-top-message').hide();
-          $('#form_category_row').hide();
+          $('.js-reporting-page--category').addClass('hidden-js');
         }
     }
 });

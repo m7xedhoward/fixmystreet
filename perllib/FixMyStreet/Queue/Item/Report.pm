@@ -64,7 +64,7 @@ sub process {
     }
 
     $self->cobrand->set_lang_and_domain($self->report->lang, 1);
-    FixMyStreet::Map::set_map_class($self->cobrand_handler->map_type);
+    FixMyStreet::Map::set_map_class($self->cobrand_handler);
 
     return unless $self->_check_abuse;
     $self->_create_vars;
@@ -232,8 +232,6 @@ sub _send {
                     }
                 }
             }
-            $self->manager->test_data->{test_req_used} = $sender->open311_test_req_used
-                if FixMyStreet->test_mode && $sender->can('open311_test_req_used');
         }
     }
 
@@ -242,6 +240,17 @@ sub _send {
 
 sub _post_send {
     my ($self, $result) = @_;
+
+    # Record any errors, whether overall successful or not (if multiple senders, perhaps one failed)
+    my @errors;
+    for my $sender ( keys %{$self->reporters} ) {
+        unless ( $self->reporters->{ $sender }->success ) {
+            push @errors, $self->reporters->{ $sender }->error;
+        }
+    }
+    if (@errors) {
+        $self->report->update_send_failed( join( '|', @errors ) );
+    }
 
     my $send_confirmation_email = $self->cobrand_handler->report_sent_confirmation_email($self->report);
     unless ($result) {
@@ -253,15 +262,9 @@ sub _post_send {
             $self->h->{sent_confirm_id_ref} = $self->report->$send_confirmation_email;
             $self->_send_report_sent_email;
         }
+        $self->cobrand_handler->post_report_sent($self->report);
         $self->log("Send successful");
     } else {
-        my @errors;
-        for my $sender ( keys %{$self->reporters} ) {
-            unless ( $self->reporters->{ $sender }->success ) {
-                push @errors, $self->reporters->{ $sender }->error;
-            }
-        }
-        $self->report->update_send_failed( join( '|', @errors ) );
         $self->log("Send failed");
     }
 }
