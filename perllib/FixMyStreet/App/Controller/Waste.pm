@@ -395,14 +395,13 @@ sub direct_debit_modify : Path('dd_amend') : Args(0) {
 
     # if reducing bin count then there won't be an ad-hoc payment
     if ( $ad_hoc ) {
-        my $dt = $c->cobrand->waste_get_next_dd_day;
-
         my $one_off_ref = $i->one_off_payment( {
                 # this will be set when the initial payment is confirmed
                 payer_reference => $c->stash->{orig_sub}->get_extra_metadata('payerReference'),
                 amount => sprintf('%.2f', $ad_hoc / 100),
                 reference => $p->id,
                 comments => '',
+                date => $c->cobrand->waste_get_next_dd_day('ad-hoc'),
         } );
     }
 
@@ -1118,13 +1117,15 @@ sub process_garden_modification : Private {
         $pro_rata = $c->cobrand->waste_get_pro_rata_cost( $new_bins, $c->stash->{garden_form_data}->{end_date});
         $c->set_param('pro_rata', $pro_rata);
     }
+
+    my $payment_method = $c->stash->{garden_form_data}->{payment_method};
     my $payment = $c->cobrand->garden_waste_cost($data->{bins_wanted});
+    $payment = 0 if $payment_method ne 'direct_debit' && $new_bins < 0;
     $c->set_param('payment', $payment);
 
     $c->forward('setup_garden_sub_params', [ $data ]);
     $c->forward('add_report', [ $data, 1 ]) or return;
 
-    my $payment_method = $c->stash->{garden_form_data}->{payment_method};
 
     if ( FixMyStreet->staging_flag('skip_waste_payment') ) {
         $c->stash->{message} = 'Payment skipped on staging';

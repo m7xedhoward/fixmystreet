@@ -101,7 +101,16 @@ sub get_closure_message {
         my $file = path($opts->{closure_file});
         chomp(my $message = $file->slurp_utf8);
         return $message;
-
+    } else {
+        my $cobrand;
+        eval {
+            $cobrand = FixMyStreet::Cobrand->get_class_for_moniker($opts->{cobrand})->new()->council_area;
+        };
+        if ($@) {
+            $cobrand = 'your council area';
+        }
+        my $message = "FixMyStreet is being updated in " . $cobrand . " to improve how problems get reported.\n\nAs part of this process we are closing all reports made before the update.\n\nAll of your reports will have been received and reviewed by " . $cobrand . " but, if you believe that this issue has not been resolved, please open a new report on it.\n\nThank you.";
+        return $message;
     }
 }
 
@@ -179,7 +188,7 @@ sub send_email_and_close {
     printf("    Sending email about %d reports: ", scalar(@problems));
     my $email_error = FixMyStreet::Email::send_cron(
         $problems->result_source->schema,
-        'archive.txt',
+        'archive-old-enquiries.txt',
         \%h,
         {
             To => [ [ $user->email, $user->name ] ],

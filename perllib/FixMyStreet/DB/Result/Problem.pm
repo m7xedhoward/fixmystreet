@@ -807,7 +807,7 @@ sub defect_types {
 #     Note:   this only makes sense when called on a problem that has been sent!
 sub can_display_external_id {
     my $self = shift;
-    if ( $self->external_id && $self->to_body_named('Lincolnshire|Isle of Wight|East Sussex|Central Bedfordshire|Shropshire') ) {
+    if ( $self->external_id && $self->to_body_named('Lincolnshire|Isle of Wight|East Sussex|Central Bedfordshire|Shropshire|Merton') ) {
         return 1;
     }
     return 0;
@@ -871,7 +871,8 @@ sub updates_sent_to_body {
     # Some bodies only send updates *to* FMS, they don't receive updates.
     my $cobrand = $self->get_cobrand_logged;
     my $handler = $cobrand->call_hook(get_body_handler_for_problem => $self);
-    return 0 if $handler && $handler->call_hook('open311_post_update_skip');
+    my $ret = $handler && $handler->call_hook(updates_sent_to_body => $self);
+    return $ret if defined $ret;
 
     my @bodies = values %{ $self->bodies };
     my @updates_sent = grep {

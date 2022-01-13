@@ -217,7 +217,7 @@ sub council_dashboard_hook {
 
     $c->detach('/reports/summary') if $c->user->is_superuser;
 
-    my $body = $c->user->from_body || _user_to_body($c);
+    my $body = $self->dashboard_body;
     if ($body) {
         # Matching URL and user's email body
         $c->detach('/reports/summary') if $body->id eq $c->stash->{body}->id;
@@ -231,36 +231,6 @@ sub council_dashboard_hook {
     $c->res->redirect('/about/council-dashboard');
 }
 
-sub _user_to_body {
-    my $c = shift;
-    my $email = lc $c->user->email;
-    return _email_to_body($c, $email);
-}
-
-sub _email_to_body {
-    my ($c, $email) = @_;
-    my ($domain) = $email =~ m{ @ (.*) \z }x;
-
-    my @data = eval { FixMyStreet->path_to('../data/fixmystreet-councils.csv')->slurp };
-    my $body;
-    foreach (@data) {
-        chomp;
-        my ($d, $b) = split /\|/;
-        if ($d eq $domain || $d eq $email) {
-            $body = $b;
-            last;
-        }
-    }
-    # If we didn't find a lookup entry, default to the first part of the domain
-    unless ($body) {
-        $domain =~ s/\.gov\.uk$//;
-        $body = ucfirst $domain;
-    }
-
-    $body = $c->forward('/reports/body_find', [ $body ]);
-    return $body;
-}
-
 sub about_hook {
     my $self = shift;
     my $c = $self->{c};
@@ -269,7 +239,7 @@ sub about_hook {
         $c->stash->{form_name} = $c->get_param('name') || '';
         $c->stash->{email} = $c->get_param('username') || '';
         if ($c->user_exists) {
-            my $body = $c->user->from_body || _user_to_body($c);
+            my $body = $self->dashboard_body;
             if ($body) {
                 $c->stash->{body} = $body;
                 $c->stash->{wards} = [ { name => 'summary' } ];
@@ -279,7 +249,7 @@ sub about_hook {
         if (my $email = $c->get_param('username')) {
             $email = lc $email;
             $email =~ s/\s+//g;
-            my $body = _email_to_body($c, $email);
+            my $body = $self->_email_to_body($email);
             if ($body) {
                 # Send confirmation email (hopefully)
                 $c->stash->{template} = 'auth/general.html';
@@ -404,6 +374,7 @@ sub report_new_munge_before_insert {
     $self->SUPER::report_new_munge_before_insert($report);
 
     FixMyStreet::Cobrand::Buckinghamshire::report_new_munge_before_insert($self, $report);
+    FixMyStreet::Cobrand::Merton::report_new_munge_before_insert($self, $report);
 }
 
 around 'munge_sendreport_params' => sub {
@@ -428,5 +399,12 @@ around 'munge_sendreport_params' => sub {
 
     $row->areas($original_areas);
 };
+
+sub reopening_disallowed {
+    my ($self, $problem) = @_;
+    my $c = $self->{c};
+    return 1 if $problem->to_body_named("Merton") && $c->user_exists && (!$c->user->from_body || $c->user->from_body->name ne "Merton Council");
+    return $self->next::method($problem);
+}
 
 1;

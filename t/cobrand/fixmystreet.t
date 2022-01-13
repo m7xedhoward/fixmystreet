@@ -16,6 +16,7 @@ my $resolver = Test::MockModule->new('Email::Valid');
 $resolver->mock('address', sub { $_[1] });
 
 my $body = $mech->create_body_ok( 2514, 'Birmingham' );
+$mech->create_body_ok( 2482, 'Bromley' );
 
 my $contact = $mech->create_contact_ok(
     body_id => $body->id,
@@ -119,7 +120,7 @@ FixMyStreet::override_config {
         $mech->content_lacks('Where we send Birmingham');
     };
 
-    subtest 'check average fix time respects cobrand cut-off date' => sub {
+    subtest 'check average fix time respects cobrand cut-off date and non-standard reports' => sub {
         $mech->log_in_ok('someone@birmingham.gov.uk');
         my $user = FixMyStreet::DB->resultset('User')->find_or_create({ email => 'counciluser@example.org' });
 
@@ -151,12 +152,48 @@ FixMyStreet::override_config {
             confirmed => DateTime->now,
         });
 
+        # Another report, created 10 days ago, that was just fixed.
+        my ($report3) = $mech->create_problems_for_body(1, $body->id, 'Title', {
+            confirmed => DateTime->now->subtract(days => 1),
+            cobrand_data => 'waste',
+        });
+        $report3->comments->create({
+            user      => $user,
+            name      => 'A User',
+            anonymous => 'f',
+            text      => 'fixed the problem',
+            state     => 'confirmed',
+            mark_fixed => 1,
+            confirmed => DateTime->now,
+        });
+
         $mech->get_ok('/about/council-dashboard');
         $mech->content_contains('How responsive is Birmingham?');
         # Average of 55 days means the older problem was included in the calculation.
         $mech->content_lacks('<td>Birmingham</td><td>55 days</td></tr>');
         # 10 days means the older problem was ignored.
         $mech->content_contains('<td>Birmingham</td><td>10 days</td></tr>');
+    };
+};
+
+subtest 'check heatmap page for cllr' => sub {
+    my $user = $mech->create_user_ok( 'cllr@bromley.gov.uk', name => 'Cllr Bromley' );
+    my $config = {
+        ALLOWED_COBRANDS => 'bromley',
+        MAPIT_URL => 'http://mapit.uk/',
+        COBRAND_FEATURES => { heatmap => { bromley => 1 } },
+    };
+    FixMyStreet::override_config $config, sub {
+        $mech->log_out_ok;
+        $mech->get('/dashboard/heatmap');
+        is $mech->res->previous->code, 302;
+        $mech->log_in_ok($user->email);
+        $mech->get('/dashboard/heatmap');
+        is $mech->res->code, 404;
+    };
+    $config->{COBRAND_FEATURES}{heatmap_dashboard_body}{bromley} = 1;
+    FixMyStreet::override_config $config, sub {
+        $mech->get_ok('/dashboard/heatmap');
     };
 };
 
@@ -304,6 +341,17 @@ FixMyStreet::override_config {
         $mech->get_ok("/report/new/ajax?latitude=51.466707&longitude=0.181108");
         $mech->content_contains('Trees');
         $mech->content_contains('Odour');
+    };
+};
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => 'fixmystreet',
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+    subtest 'fixmystreet.com privacy policy page link deactivates correctly' => sub {
+        $mech->get_ok('/about/privacy');
+        $mech->content_contains('<strong>Privacy and cookies</strong>');
+        $mech->content_lacks('<a href="/privacy">Privacy and cookies</a>');
     };
 };
 

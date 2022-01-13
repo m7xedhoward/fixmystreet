@@ -12,6 +12,7 @@ use Utils;
 use Moo;
 with 'FixMyStreet::Roles::ConfirmOpen311';
 with 'FixMyStreet::Roles::ConfirmValidation';
+with 'FixMyStreet::Roles::Open311Multi';
 
 sub council_area_id { 2566 }
 sub council_area { 'Peterborough' }
@@ -112,9 +113,22 @@ sub open311_munge_update_params {
 
     # Send the FMS problem ID with the update.
     $params->{service_request_id_ext} = $comment->problem->id;
+}
 
-    my $contact = $comment->problem->contact;
-    $params->{service_code} = $contact->email;
+sub updates_sent_to_body {
+    my ($self, $problem) = @_;
+
+    my $code = $problem->contact->email;
+    return 0 if $code =~ /^Bartec/;
+    return 1;
+}
+
+sub should_skip_sending_update {
+    my ($self, $update) = @_;
+
+    my $code = $update->problem->contact->email;
+    return 1 if $code =~ /^Bartec/;
+    return 0;
 }
 
 around 'open311_config' => sub {

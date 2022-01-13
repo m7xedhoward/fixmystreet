@@ -2,6 +2,21 @@
 
 * Unreleased
     - Front end improvements:
+        - Highlight pin on sidebar focus as well as hover.
+        - Map page pagination links now styled as links rather than buttons. #3727
+        - Include username in inactive email.
+    - Bugfixes:
+        - Add ID attributes to change password form inputs.
+        - Fix link deactivation for privacy policy link on privacy policy page. #3704
+    - Development improvements:
+        - Default make_css to `web/cobrands` rather than `web`.
+        - Ability to pass custom arguments (eg: SSL config) to server when running via Docker
+        - Allow bin/fetch start/end times to be fractional.
+    - Open311 improvements:
+        - Increase default timeout.
+
+* v4.0 (3rd December 2021)
+    - Front end improvements:
         - Multi-page form reporting.
         - New aerial map toggle.
         - Send text alerts for report updates to only-phone-verified users.

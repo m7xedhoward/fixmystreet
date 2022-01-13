@@ -21,6 +21,8 @@ sub default_map_zoom { 6 }
 
 sub send_questionnaires { 0 }
 
+sub abuse_reports_only { 1 }
+
 sub disambiguate_location {
     my $self    = shift;
     my $string  = shift;
@@ -35,7 +37,7 @@ sub disambiguate_location {
 
 sub lookup_site_code_config { {
     buffer => 200, # metres
-    url => "https://tilma.staging.mysociety.org/mapserver/shropshire",
+    url => "https://tilma.mysociety.org/mapserver/shropshire",
     srsname => "urn:ogc:def:crs:EPSG::27700",
     typename => "Street_Gazetteer",
     property => "USRN",

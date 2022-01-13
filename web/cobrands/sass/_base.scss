@@ -448,12 +448,12 @@ select.form-control {
 }
 
 /* On a reporting page MyW/anon */
-small#or {
+small.or {
   margin: 1em auto;
   width: 100%;
 }
-small#or:before,
-small#or:after {
+small.or:before,
+small.or:after {
   background-color: #fff;
   content: "";
   display: inline-block;
@@ -462,11 +462,11 @@ small#or:after {
   vertical-align: middle;
   width: 50%;
 }
-small#or:before {
+small.or:before {
   right: 1em;
   margin-left: -50%;
 }
-small#or:after {
+small.or:after {
   left: 1em;
   margin-right: -50%;
 }
@@ -1792,6 +1792,7 @@ html.js #map .noscript {
   display: none;
 }
 
+#ns_fms_pan_zoom,
 #fms_pan_zoom {
   top: 0.5em;
   #{$right}: 0.5em;
@@ -1801,6 +1802,10 @@ html.js #map .noscript {
   }
 }
 
+#ns_fms_pan_zoom_panup,
+#ns_fms_pan_zoom_pandown,
+#ns_fms_pan_zoom_panleft,
+#ns_fms_pan_zoom_panright,
 #fms_pan_zoom_panup,
 #fms_pan_zoom_pandown,
 #fms_pan_zoom_panleft,
@@ -1808,6 +1813,12 @@ html.js #map .noscript {
   display: none;
 }
 
+#ns_fms_pan_zoom_panup,
+#ns_fms_pan_zoom_pandown,
+#ns_fms_pan_zoom_panleft,
+#ns_fms_pan_zoom_panright,
+#ns_fms_pan_zoom_zoomin,
+#ns_fms_pan_zoom_zoomout,
 #fms_pan_zoom_panup,
 #fms_pan_zoom_pandown,
 #fms_pan_zoom_panleft,
@@ -1826,18 +1837,21 @@ html.js #map .noscript {
   filter: none !important; // Override OpenLayers PNG handling of the navigation
 }
 
+#ns_fms_pan_zoom_panup,
 #fms_pan_zoom_panup {
   background-position: 0 0;
   #{$right}: 30px;
   #{$left}: auto;
   top: 0;
 }
+#ns_fms_pan_zoom_pandown,
 #fms_pan_zoom_pandown {
   background-position: 0 -36px;
   #{$right}: 30px;
   #{$left}: auto;
   top: 72px;
 }
+#ns_fms_pan_zoom_panleft,
 #fms_pan_zoom_panleft {
   background-position: -36px 0;
   width: 48px;
@@ -1845,6 +1859,7 @@ html.js #map .noscript {
   #{$left}: auto;
   top: 36px;
 }
+#ns_fms_pan_zoom_panright,
 #fms_pan_zoom_panright {
   background-position: -36px -36px;
   width: 48px;
@@ -1852,12 +1867,14 @@ html.js #map .noscript {
   #{$left}: auto;
   top: 36px;
 }
+#ns_fms_pan_zoom_zoomin,
 #fms_pan_zoom_zoomin {
   background-position: -84px 0;
   padding-top: 44px;
   #{$right}: 0;
   top: 0;
 }
+#ns_fms_pan_zoom_zoomout,
 #fms_pan_zoom_zoomout {
   background-position: -120px 100%;
   padding-top: 44px;
@@ -2384,26 +2401,18 @@ label .muted {
 .pagination {
   text-align: center;
   padding: 0.5em 1em;
+  margin-bottom: 1em;
   background: #eee;
   position: relative;
+
   .prev {
     position: absolute;
     #{$left}: 0.5em;
   }
+
   .next {
     position: absolute;
     #{$right}: 0.5em;
-  }
-  a {
-    @include inline-block;
-    color: $primary_text;
-    background: $primary;
-    padding-#{$left}: 0.5em;
-    padding-#{$right}: 0.5em;
-    &:hover {
-      text-decoration: none;
-      background: $primary/1.1;
-    }
   }
 }
 
@@ -2845,6 +2854,7 @@ a#geolocate_link {
   .olControlAttribution,
   .olControlPanZoom,
   .sub-map-links,
+  #ns_fms_pan_zoom,
   #fms_pan_zoom,
   .screen-only,
   .olMapViewport,
