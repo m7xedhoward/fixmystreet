@@ -4,8 +4,8 @@ my $mech = FixMyStreet::TestMech->new;
 
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 
-my $body = $mech->create_body_ok(2237, 'Oxfordshire County Council');
-my $body2 = $mech->create_body_ok(2482, 'Bromley Council');
+my $body = $mech->create_body_ok(2237, 'Oxfordshire County Council', {}, { cobrand => 'oxfordshire' });
+my $body2 = $mech->create_body_ok(2482, 'Bromley Council', {}, { cobrand => 'bromley' });
 my $editor = $mech->create_user_ok('counciluser@example.com', name => 'Council User', from_body => $body);
 my $user = $mech->create_user_ok('staffuser@example.com', name => 'Other Council User', from_body => $body);
 
@@ -21,6 +21,12 @@ $user->user_body_permissions->create({
     body => $body,
     permission_type => 'report_edit_priority',
 });
+
+my $contact = $mech->create_contact_ok(
+    body_id => $body->id,
+    category => 'Traffic lights',
+    email => 'lights@example.com'
+);
 
 my $role_a = FixMyStreet::DB->resultset("Role")->create({
     body => $body,
@@ -77,6 +83,17 @@ FixMyStreet::override_config {
     subtest 'delete a role' => sub {
         $mech->submit_form_ok({ button => 'delete_role' });
         $mech->content_lacks('Role A');
+    };
+
+    subtest 'adding category restrictions to a role' => sub {
+        $mech->get_ok("/admin/roles");
+        $mech->follow_link_ok({ text => 'Edit' });
+
+        my $contact_id = $contact->id;
+        $mech->content_contains("contacts[$contact_id]");
+        $mech->submit_form_ok({ with_fields => { "contacts[$contact_id]" =>  1 } });
+        $mech->follow_link_ok({ text => 'Edit' });
+        $mech->content_like(qr/name="contacts\[$contact_id\]"[^>]*checked/);
     };
 
     subtest 'assign a user to a role' => sub {

@@ -12,8 +12,9 @@ ok $sample_pdf->exists, "sample file $sample_pdf exists";
 
 my $mech = FixMyStreet::TestMech->new;
 
-my $body = $mech->create_body_ok(2217, 'Buckinghamshire Council', {
-    send_method => 'Open311', api_key => 'key', endpoint => 'endpoint', jurisdiction => 'fms', can_be_devolved => 1 });
+my $body = $mech->create_body_ok(163793, 'Buckinghamshire Council', {
+    send_method => 'Open311', api_key => 'key', endpoint => 'endpoint', jurisdiction => 'fms', can_be_devolved => 1 },
+    { cobrand => 'buckinghamshire' });
 my $system_user = $mech->create_user_ok('system@bucks', from_body => $body);
 $body->update({ comment_user => $system_user });
 my $contact = $mech->create_contact_ok(body_id => $body->id, category => 'Claim', email => 'CLAIM');
@@ -27,7 +28,7 @@ my $template = $contact->response_templates->create({
 });
 
 my ($report) = $mech->create_problems_for_body(1, $body->id, 'Title', {
-    external_id => '4123',
+    external_id => '87654321',
 });
 my $report_id = $report->id;
 
@@ -73,6 +74,7 @@ FixMyStreet::override_config {
 }, sub {
     subtest 'Report new vehicle claim, report id known' => sub {
         $mech->get_ok('/claims');
+        my $fault_id = "12345678"; # fault IDs must be 8 chars
         $mech->submit_form_ok({ button => 'start' });
         $mech->submit_form_ok({ with_fields => { what => 'vehicle', claimed_before => 'Yes' } }, "claim type screen");
         $mech->submit_form_ok({ with_fields => { name => "Test McTest", email => 'test@example.org', phone => '01234 567890', address => "12 A Street\nA Town" } }, "about you screen");
@@ -83,7 +85,9 @@ FixMyStreet::override_config {
         $mech->submit_form_ok({ with_fields => { fault_reported => 'Yes' } }, "fault reported");
         $mech->submit_form_ok({ with_fields => { report_id => "hmm" } }, "report id");
         $mech->content_contains('Please provide a valid report ID');
-        $mech->submit_form_ok({ with_fields => { report_id => $report_id } }, "report id");
+        $mech->submit_form_ok({ with_fields => { report_id => "1234567" } }, "report id");
+        $mech->content_contains('Please provide a valid report ID');
+        $mech->submit_form_ok({ with_fields => { report_id => $fault_id } }, "report id");
         $mech->submit_form_ok({ with_fields => { location => 'A street' } }, 'location details');
         $mech->submit_form_ok({ with_fields => { latitude => 51.81386, longitude => -.82973 } }, 'location details');
         $mech->submit_form_ok({ with_fields => { 'incident_date.year' => 2020, 'incident_date.month' => '09', 'incident_date.day' => 10, incident_time => 'morning' } }, "incident time");
@@ -93,7 +97,7 @@ FixMyStreet::override_config {
             photos => [ $sample_file, undef, Content_Type => 'image/jpeg' ],
             photos2 => [ $sample_file, undef, Content_Type => 'image/jpeg' ],
         } }, "cause screen");
-        $mech->submit_form_ok({ with_fields => { make => 'a car', registration => 'rego!', mileage => '20',
+        $mech->submit_form_ok({ with_fields => { registration => 'rego!', mileage => '20',
             v5 => [ $sample_pdf, undef, Content_Type => 'application/octet-stream', filename => 'v5.pdf' ],
             v5_in_name => 'Yes', insurer_address => 'insurer address', damage_claim => 'No', vat_reg => 'No',
         } }, "car details");
@@ -121,7 +125,7 @@ Full address: 12 A Street
 A Town
 Has the highways fault been fixed?: No
 Have you reported the fault to the Council?: Yes
-Fault ID: $report_id
+Fault ID: $fault_id
 Postcode, or street name and area of the source: A street
 Latitude: 51.81386
 Longitude: -0.82973
@@ -142,7 +146,6 @@ Were you aware of it before?: Yes
 Where was the cause of the incident?: Bridge
 Describe the incident cause: a cause
 Please provide two dated photos of the incident: 2 photos
-Make and model: a car
 Registration number: rego!
 Vehicle mileage: 20
 Copy of the vehicle’s V5 Registration Document: sample.pdf
@@ -154,16 +157,16 @@ Describe the damage to the vehicle: the car was broken
 Please provide two photos of the damage to the vehicle: 2 photos
 Please provide receipted invoices for repairs: sample.pdf
 Are you claiming for tyre damage?: Yes
-Age and Mileage of the tyre(s) at the time of the incident: 20
+Mileage of the tyre(s) at the time of the incident: 20
 EOF
         is $report->detail, $expected_detail;
         is $report->latitude, 51.81386;
         FixMyStreet::Script::Reports::send();
         my @email = $mech->get_email;
         is $email[0]->header('To'), 'TfB <claims@example.net>';
-        is $email[0]->header('Subject'), "New claim - vehicle - Test McTest - $report_id - Rain Road, Aylesbury";
+        is $email[0]->header('Subject'), "New claim - vehicle - Test McTest - $fault_id - Rain Road, Aylesbury";
         like $email[1]->header('To'), qr/madeareport\@/;
-        is $email[1]->header('Subject'), "Your claim has been submitted, ref $report_id";
+        is $email[1]->header('Subject'), "Your claim has been submitted, ref $fault_id";
         my $req = Open311->test_req_used;
         is $req, undef, 'Nothing sent by Open311';
         is $report->user->alerts->count, 1, 'User has an alert for this report';
@@ -190,7 +193,7 @@ EOF
         $mech->submit_form_ok({ with_fields => { what_cause => 'other', what_cause_other => 'Duck', aware => 'Yes', where_cause => 'bridge', describe_cause => 'a cause',
             photos => [ $sample_file, undef, Content_Type => 'application/octet-stream' ],
         } }, 'cause details');
-        $mech->submit_form_ok({ with_fields => { make => 'a car', registration => 'rego!', mileage => '20',
+        $mech->submit_form_ok({ with_fields => { registration => 'rego!', mileage => '20',
             v5 => [ $sample_pdf, undef, Content_Type => 'application/octet-stream' ],
             v5_in_name => 'Yes', insurer_address => 'insurer address', damage_claim => 'No', vat_reg => 'No',
         } }, 'vehicle details');

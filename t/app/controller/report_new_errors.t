@@ -5,6 +5,8 @@ use Path::Tiny;
 FixMyStreet::App->log->disable('info');
 END { FixMyStreet::App->log->enable('info'); }
 
+use t::Mock::Nominatim;
+
 my $mech = FixMyStreet::TestMech->new;
 
 my $sample_file = path(__FILE__)->parent->child("sample.jpg");
@@ -33,16 +35,18 @@ subtest "test that bare requests to /report/new get redirected" => sub {
 my %body_ids;
 for my $body (
     { area_id => 2226, name => 'Gloucestershire County Council' },
-    { area_id => 2504, name => 'Westminster City Council' },
-    { area_id => 2482, name => 'Bromley Council' },
-    { area_id => 2217, name => 'Buckinghamshire Council' },
-    { area_id => 2232, name => 'Lincolnshire County Council' },
-    { area_id => 2237, name => 'Oxfordshire County Council' },
-    { area_id => 2600, name => 'Rutland County Council' },
-    { area_id => 2234, name => 'Northamptonshire Highways' },
-    { area_id => 2566, name => 'Peterborough City Council' },
+    { area_id => 2504, name => 'Westminster City Council', cobrand => 'westminster' },
+    { area_id => 2482, name => 'Bromley Council', cobrand => 'bromley' },
+    { area_id => 163793, name => 'Buckinghamshire Council', cobrand => 'buckinghamshire' },
+    { area_id => 2232, name => 'Lincolnshire County Council', cobrand => 'lincolnshire' },
+    { area_id => 2237, name => 'Oxfordshire County Council', cobrand => 'oxfordshire' },
+    { area_id => 2600, name => 'Rutland County Council', cobrand => 'rutland' },
+    { area_id => 164186, name => 'Northamptonshire Highways', cobrand => 'northamptonshire' },
+    { area_id => 2566, name => 'Peterborough City Council', cobrand => 'peterborough' },
+    { area_id => 2508, name => 'Hackney Council', cobrand => 'hackney' },
 ) {
-    my $body_obj = $mech->create_body_ok($body->{area_id}, $body->{name});
+    my $extra = { cobrand => $body->{cobrand} } if $body->{cobrand};
+    my $body_obj = $mech->create_body_ok($body->{area_id}, $body->{name}, {}, $extra);
     $body_ids{$body->{area_id}} = $body_obj->id;
 }
 
@@ -68,9 +72,9 @@ $mech->create_contact_ok(
     email => 'streetlights-2226@example.com',
 );
 $mech->create_contact_ok(
-    body_id => $body_ids{2217}, # Buckinghamshire
+    body_id => $body_ids{163793}, # Buckinghamshire
     category => 'Street lighting',
-    email => 'streetlights-2217@example.com',
+    email => 'streetlights-163793@example.com',
 );
 $mech->create_contact_ok(
     body_id => $body_ids{2232}, # Lincolnshire
@@ -88,14 +92,19 @@ $mech->create_contact_ok(
     email => 'trees-2600@example.com',
 );
 $mech->create_contact_ok(
-    body_id => $body_ids{2234}, # Northamptonshire
+    body_id => $body_ids{164186}, # Northamptonshire
     category => 'Trees',
-    email => 'trees-2234@example.com',
+    email => 'trees-164186@example.com',
 );
 $mech->create_contact_ok(
     body_id => $body_ids{2566}, # Peterborough
     category => 'Trees',
     email => 'trees-2566@example.com',
+);
+$mech->create_contact_ok(
+    body_id => $body_ids{2508}, # Hackney
+    category => 'Trees',
+    email => 'trees-2508@example.com',
 );
 
 # test that the various bit of form get filled in and errors correctly
@@ -538,6 +547,27 @@ foreach my $test (
         errors => [ 'Please enter a subject', 'Reports are limited to 1700 characters in length. Please shorten your report' ],
     },
     {
+        msg    => 'Hackney long detail',
+        pc     => 'E8 1DY',
+        fields => {
+            title         => '',
+            detail        => 'X' . 'x' x 256,
+            photo1        => '',
+            photo2        => '',
+            photo3        => '',
+            name          => 'Bob Example',
+            may_show_name => '1',
+            username_register => 'bob@example.com',
+            username      => '',
+            phone         => '',
+            category      => 'Trees',
+            password_sign_in => '',
+            password_register => '',
+        },
+        changes => { },
+        errors => [ 'Please enter a subject', 'Reports are limited to 256 characters in length. Please shorten your report' ],
+    },
+    {
         msg    => 'Lincolnshire long phone',
         pc     => 'PE9 2GX',
         fields => {
@@ -670,7 +700,7 @@ foreach my $test (
 
         # submit initial pc form
         FixMyStreet::override_config {
-            ALLOWED_COBRANDS => [ { fixmystreet => '.' }, 'bromley', 'oxfordshire', 'rutland', 'lincolnshire', 'buckinghamshire', 'northamptonshire', 'peterborough' ],
+            ALLOWED_COBRANDS => [ { fixmystreet => '.' }, 'bromley', 'oxfordshire', 'rutland', 'lincolnshire', 'buckinghamshire', 'northamptonshire', 'peterborough', 'hackney' ],
             MAPIT_URL => 'http://mapit.uk/',
         }, sub {
             $mech->submit_form_ok( { with_fields => { pc => $test->{pc} } },

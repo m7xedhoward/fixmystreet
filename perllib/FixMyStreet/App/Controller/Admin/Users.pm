@@ -32,13 +32,11 @@ sub index :Path : Args(0) {
         my $user_rs = FixMyStreet::DB->resultset("User")->search({ id => \@uids });
         if ( $c->get_param('remove-staff') ) {
             foreach my $user ($user_rs->all) {
+                $user->remove_staff;
                 $user->update({
-                    from_body => undef,
                     email_verified => 0,
                     phone_verified => 0,
                 });
-                $user->user_roles->delete;
-                $user->admin_user_body_permissions->delete;
             }
         } else {
             my @role_ids = $c->get_param_list('roles');
@@ -142,31 +140,60 @@ sub add : Local : Args(0) {
         $phone = $parsed_phone if $parsed_phone;
     }
 
-    my $existing_email = $email_v && $c->model('DB::User')->find( { email => $email } );
-    my $existing_phone = $phone_v && $c->model('DB::User')->find( { phone => $phone } );
-    if ($existing_email || $existing_phone) {
-        $c->stash->{field_errors}->{username} = _('User already exists');
+    # A user without a body does not appear in the /admin/users list for
+    # a given cobrand. For non-superusers, a 'body' parameter is guaranteed to
+    # be passed through to this code path so a staff user is always created.
+    # Additionally, if an existing user is submitted, we check if they have a
+    # body; if not, we assign a body to that user so they
+    # will be visible to admin on /admin/users. (If the user already has a
+    # body, we simply return an existence error.)
+    my $from_body = $c->get_param('body') || undef;
+
+    my $user_from_email = $email_v && $c->model('DB::User')->find( { email => $email } );
+    my $user_from_phone = $phone_v && $c->model('DB::User')->find( { phone => $phone } );
+    my $user = $user_from_email || $user_from_phone;
+
+    my $log_string;
+    if ($user) {
+        if ($user->from_body) {
+            $c->stash->{field_errors}->{username} = _('User already exists');
+        }
+
+        $c->stash->{user} = $user;
+
+        return if %{$c->stash->{field_errors}};
+
+        # Assign body to user
+        $user->from_body($from_body);
+        $user->update;
+
+        $log_string =  'edit';
+    }
+    else {
+        $user = $c->model('DB::User')->new( {
+            name => $c->get_param('name'),
+            email => $email ? $email : undef,
+            email_verified => $email && $email_v ? 1 : 0,
+            phone => $phone || undef,
+            phone_verified => $phone && $phone_v ? 1 : 0,
+            from_body => $from_body,
+            # Only superusers can flag users, unless for Zurich
+            flagged => ( ( $c->user->is_superuser || $c->cobrand->moniker eq 'zurich' ) && $c->get_param('flagged') ) || 0,
+            # Only superusers can create superusers
+            is_superuser => ( $c->user->is_superuser && $c->get_param('is_superuser') ) || 0,
+        } );
+
+        $c->stash->{user} = $user;
+
+        return if %{$c->stash->{field_errors}};
+
+        $c->forward('user_cobrand_extra_fields');
+        $user->insert;
+
+        $log_string = 'add';
     }
 
-    my $user = $c->model('DB::User')->new( {
-        name => $c->get_param('name'),
-        email => $email ? $email : undef,
-        email_verified => $email && $email_v ? 1 : 0,
-        phone => $phone || undef,
-        phone_verified => $phone && $phone_v ? 1 : 0,
-        from_body => $c->get_param('body') || undef,
-        flagged => $c->get_param('flagged') || 0,
-        # Only superusers can create superusers
-        is_superuser => ( $c->user->is_superuser && $c->get_param('is_superuser') ) || 0,
-    } );
-    $c->stash->{user} = $user;
-
-    return if %{$c->stash->{field_errors}};
-
-    $c->forward('user_cobrand_extra_fields');
-    $user->insert;
-
-    $c->forward( '/admin/log_edit', [ $user->id, 'user', 'add' ] );
+    $c->forward( '/admin/log_edit', [ $user->id, 'user', $log_string ] );
 
     $c->flash->{status_message} = _("Updated!");
     $c->detach('post_edit_redirect', [ $user ]);
@@ -295,7 +322,10 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
         $user->phone_verified( $phone_v );
         $user->name( $name );
 
-        $user->flagged( $c->get_param('flagged') || 0 );
+        # Only superusers can flag / unflag a user, unless for Zurich
+        if ($c->user->is_superuser || $c->cobrand->moniker eq 'zurich') {
+            $user->flagged( $c->get_param('flagged') || 0 )
+        }
         # Only superusers can grant superuser status
         $user->is_superuser( ( $c->user->is_superuser && $c->get_param('is_superuser') ) || 0 );
         # Superusers can set from_body to any value, but other staff can only
@@ -321,9 +351,7 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
 
         if (!$user->from_body) {
             # Non-staff users aren't allowed any permissions or to be in an area
-            $user->admin_user_body_permissions->delete;
-            $user->user_roles->delete;
-            $user->area_ids(undef);
+            $user->remove_staff;
             delete $c->stash->{areas};
             delete $c->stash->{roles};
             delete $c->stash->{fetched_areas_body_id};
@@ -393,17 +421,10 @@ sub edit : Chained('user') : PathPart('') : Args(0) {
             $c->stash->{body} = $user->from_body;
             $c->forward('/admin/fetch_contacts');
         }
-        my @contacts = @{$user->get_extra_metadata('categories') || []};
-        my %active_contacts = map { $_ => 1 } @contacts;
-        my @live_contacts = $c->stash->{live_contacts}->all;
-        my @all_contacts = map { {
-            id => $_->id,
-            category => $_->category,
-            active => $active_contacts{$_->id},
-            group => $_->groups,
-        } } @live_contacts;
-        $c->stash->{contacts} = \@all_contacts;
-        $c->forward('/report/stash_category_groups', [ \@all_contacts, { combine_multiple => 1 } ]);
+        $c->forward('/admin/stash_contacts_for_template', [
+            \@{$user->get_extra_metadata('categories') || []}
+        ]);
+        $c->forward('/report/stash_category_groups', [ $c->stash->{contacts}, { combine_multiple => 1 } ]);
     }
 
     # this goes after in case we've delete any alerts
@@ -425,7 +446,7 @@ sub log : Chained('user') : PathPart('log') : Args(0) {
     foreach ($user->admin_logs->all) {
         push @{$time{$_->whenedited->epoch}}, { type => 'log', date => $_->whenedited, log => $_ };
     }
-    foreach ($c->cobrand->problems->search({ extra => { like => '%contributed_by%' . $user->id . '%' } })->all) {
+    foreach ($c->cobrand->problems->search({ 'contributed_by.id' => $user->id }, { join => 'contributed_by' })->all) {
         next unless $_->get_extra_metadata('contributed_by') == $user->id;
         push @{$time{$_->created->epoch}}, { type => 'problemContributedBy', date => $_->created, obj => $_ };
     }
@@ -538,8 +559,17 @@ sub user_cobrand_extra_fields : Private {
 sub user_alert_details : Private {
     my ( $self, $c ) = @_;
 
-    my @alerts = $c->stash->{user}->alerts({}, { prefetch => 'alert_type' })->all;
+    my $page = $c->get_param('p') || 1;
+
+    my $alerts = $c->stash->{user}->alerts({}, {
+        prefetch => 'alert_type',
+        rows => 100,
+        order_by => 'whensubscribed',
+    })->page( $page );
+    my @alerts = $alerts->all;
+
     $c->stash->{alerts} = \@alerts;
+    $c->stash->{alerts_pager} = $alerts->pager;
 
     my @wards;
 

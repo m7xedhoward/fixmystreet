@@ -82,6 +82,10 @@ sub on_map_default_status { 'open' }
 sub open311_munge_update_params {
     my ($self, $params, $comment, $body) = @_;
 
+    if ($comment->problem->get_extra_field_value('NSGRef')) {
+        $params->{nsg_ref} = $comment->problem->get_extra_field_value('NSGRef');
+    }
+
     $params->{service_request_id_ext} = $comment->problem->id;
 }
 
@@ -166,8 +170,13 @@ sub admin_user_domain { 'bexley.gov.uk' }
 sub open311_post_send {
     my ($self, $row, $h, $sender) = @_;
 
-    # Check Open311 was successful
-    return unless $row->external_id;
+    # Check Open311 was successful, or if this was the first time a Symology report failed
+    if ($sender->contact->email !~ /^(Confirm|Uniform)/) { # it's a Symology report
+        # failed at least once, assume email was sent on first failure
+        return if $row->send_fail_count;
+    } else {
+        return unless $row->external_id;
+    }
 
     my @lighting = (
         'Lamp post',
@@ -204,6 +213,9 @@ sub open311_post_send {
             $p1_email = 1;
             $outofhours_email = 1;
         }
+    } elsif ($row->category eq 'Graffiti') {
+        my $offensive = $row->get_extra_field_value('offensive') || '';
+        $p1_email = 1 if $offensive eq 'Yes';
     } elsif ($row->category eq 'Street cleaning and litter') {
         my $reportType = $row->get_extra_field_value('reportType') || '';
         if ($reportType eq 'Oil spillage' || $dangerous eq 'Yes') {
@@ -256,7 +268,7 @@ sub _is_out_of_hours {
     return 1 if $time->hour < 8;
     return 1 if $time->wday == 1 || $time->wday == 7;
     return 1 if FixMyStreet::Cobrand::UK::is_public_holiday();
-    return 1 if DateTime->now->ymd eq '2021-12-24';
+    return 1 if DateTime->now->ymd eq '2022-12-28';
     return 0;
 }
 
@@ -271,5 +283,7 @@ sub update_anonymous_message {
 sub report_form_extras {
     ( { name => 'private_comments' } )
 }
+
+sub report_sent_confirmation_email { 'id' }
 
 1;

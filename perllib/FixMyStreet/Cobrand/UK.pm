@@ -117,7 +117,7 @@ sub short_name {
     return 'Durham+City' if $name eq 'Durham City Council';
 
     $name =~ s/^(Royal|London) Borough of //;
-    $name =~ s/ (Borough|City|District|County) Council$//;
+    $name =~ s/ (Borough|City|District|County|Parish|Town) Council$//;
     $name =~ s/ Council$//;
     $name =~ s/ & / and /;
     $name =~ tr{/}{_};
@@ -207,7 +207,10 @@ sub council_rss_alert_options {
     my ( @options, @reported_to_options );
     if ( $num_councils == 1 or $num_councils == 2 ) {
         my ($council, $ward);
-        my $body = FixMyStreet::DB->resultset('Body')->active->search({ name => { '!=' => 'TfL' } })->for_areas(keys %$all_areas)->first;
+        my $body = FixMyStreet::DB->resultset('Body')->active->search(
+            {
+                name => { -not_in => ['TfL', 'National Highways'] }
+            })->for_areas(keys %$all_areas)->first;
         foreach (values %$all_areas) {
             if ($councils{$_->{type}}) {
                 $council = $_;
@@ -358,12 +361,12 @@ sub report_check_for_errors {
 
 =head2 get_body_handler_for_problem
 
-Returns a cobrand for the body that a problem was logged against.
+Returns a cobrand for the body that a problem was sent to.
 
     my $handler = $cobrand->get_body_handler_for_problem($row);
     my $handler = $cobrand_class->get_body_handler_for_problem($row);
 
-If the UK council in bodies_str has a FMS.com cobrand then an instance of that
+If body in bodies_str has a cobrand set in its extra metadata then an instance of that
 cobrand class is returned, otherwise the default FixMyStreet cobrand is used.
 
 =cut
@@ -371,17 +374,15 @@ cobrand class is returned, otherwise the default FixMyStreet cobrand is used.
 sub get_body_handler_for_problem {
     my ($self, $row) = @_;
 
-    if ($row->to_body_named('TfL')) {
-        return FixMyStreet::Cobrand::TfL->new;
-    }
     # Do not do anything for National Highways here, as we don't want it to
     # treat this as a cobrand for e.g. submit report emails made on .com
+    my @bodies = grep { $_->name !~ /National Highways/ } values %{$row->bodies};
 
-    my @bodies = values %{$row->bodies};
-    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|National Highways/ } @bodies;
+    for my $body ( @bodies ) {
+        my $cobrand = $body->get_cobrand_handler;
+        return $cobrand if $cobrand;
+    }
 
-    my $cobrand = FixMyStreet::Cobrand->body_handler(\%areas);
-    return $cobrand if $cobrand;
     return ref $self ? $self : $self->new;
 }
 
@@ -409,7 +410,7 @@ sub link_to_council_cobrand {
         my $url = sprintf("%s%s", $handler->base_url, $problem->url);
         return sprintf("<a href='%s'>%s</a>", $url, $problem->body);
     } else {
-        return $problem->body;
+        return $problem->body(0);
     }
 }
 
@@ -426,6 +427,79 @@ sub report_new_munge_before_insert {
     }
 }
 
+sub report_new_munge_after_insert {
+    my ($self, $report) = @_;
+
+    if ($report->to_body_named('National Highways')) {
+        FixMyStreet::Cobrand::HighwaysEngland::report_new_munge_after_insert($self, $report);
+    }
+}
+
+# Allow cobrands to disallow updates on some things.
+# Note this only ever locks down more than the default.
+sub updates_disallowed {
+    my $self = shift;
+    my ($problem) = @_;
+    my $c = $self->{c};
+
+    # If closed due to problem/category closure, want that to take precedence
+    my $parent = $self->next::method(@_);
+    return $parent if $parent;
+
+    my $cfg = $self->feature('updates_allowed') || '';
+
+    my $body_user = $c->user_exists && $c->user->from_body && $c->user->from_body->name eq $self->council_name;
+    return $self->_updates_disallowed_check($cfg, $problem, $body_user);
+}
+
+sub _updates_disallowed_check {
+    my ($self, $cfg, $problem, $body_user) = @_;
+
+    my $c = $self->{c};
+    my $superuser = $c->user_exists && $c->user->is_superuser;
+    my $staff = $body_user || $superuser;
+    my $reporter = $c->user_exists && $c->user->id == $problem->user->id;
+    my $open = !($problem->is_fixed || $problem->is_closed);
+    my $body_comment_user = $self->body && $self->body->comment_user_id && $problem->user_id == $self->body->comment_user_id;
+
+    if ($cfg eq 'none') {
+        return $cfg;
+    } elsif ($cfg eq 'staff') {
+        # Only staff and superusers can leave updates
+        return $cfg unless $staff;
+    } elsif ($cfg eq 'open') {
+        return $cfg unless $open;
+    } elsif ($cfg eq 'reporter') {
+        return $cfg unless $reporter;
+    } elsif ($cfg eq 'reporter-open') {
+        return $cfg unless $reporter && $open;
+    } elsif ($cfg eq 'reporter/staff') {
+        return $cfg unless $reporter || $staff;
+    } elsif ($cfg eq 'reporter/staff-open') {
+        return $cfg unless ($reporter || $staff) && $open;
+    } elsif ($cfg eq 'notopen311') {
+        return $cfg unless !$body_comment_user;
+    } elsif ($cfg eq 'notopen311-open') {
+        return $cfg unless !$body_comment_user && $open;
+    }
+    return '';
+}
+
+# Report if cobrand denies updates by user
+sub deny_updates_by_user {
+    my ($self, $row) = @_;
+    my $cfg = $self->feature('updates_allowed') || '';
+    if ($cfg eq 'none' || $cfg eq 'staff') {
+        return 1;
+    } elsif ($cfg eq 'reporter-open' && !$row->is_open) {
+        return 1;
+    } elsif ($cfg eq 'open' && !$row->is_open) {
+        return 1;
+    } else {
+        return;
+    }
+};
+
 # To use recaptcha, add a RECAPTCHA key to your config, with subkeys secret and
 # site_key, taken from the recaptcha site. This shows it to non-UK IP addresses
 # on alert and report pages.
@@ -436,7 +510,7 @@ sub requires_recaptcha {
 
     return 0 if $c->user_exists;
     return 0 if !FixMyStreet->config('RECAPTCHA');
-    return 0 unless $c->action =~ /^(alert|report|around)/;
+    return 0 unless $c->action =~ /^(alert|report|around|contact)/;
     return 0 if $c->user_country eq 'GB';
     return 1;
 }
@@ -503,7 +577,15 @@ sub _fetch_url {
     my $url = shift;
     my $ua = LWP::UserAgent->new;
     $ua->timeout(5);
+    return if FixMyStreet->test_mode;
+    # uncoverable statement
     $ua->get($url)->content;
+}
+
+sub ooh_times {
+    my ($self, $body) = @_;
+    my $times = $body->get_extra_metadata("ooh_times");
+    return FixMyStreet::OutOfHours->new(times => $times, holidays => public_holidays());
 }
 
 # UK council dashboard summary/heatmap access

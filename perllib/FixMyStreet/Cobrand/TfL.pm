@@ -69,16 +69,6 @@ sub get_geocoder { 'OSM' }
 
 sub category_change_force_resend { 1 }
 
-sub area_check {
-    my ( $self, $params, $context ) = @_;
-
-    my $councils = $params->{all_areas};
-    my $council_match = grep { $councils->{$_} } @{ $self->council_area_id };
-
-    return 1 if $council_match;
-    return ( 0, $self->area_check_error_message($params, $context) );
-}
-
 sub enter_postcode_text {
     my ($self) = @_;
     return 'Enter a London postcode, or street name and area, or a reference number of a problem previously reported';
@@ -94,11 +84,6 @@ sub about_hook {
         $c->res->redirect($self->privacy_policy_url);
         $c->detach;
     }
-}
-
-sub body {
-    # Overridden because UKCouncils::body excludes TfL
-    FixMyStreet::DB->resultset('Body')->search({ name => 'TfL' })->first;
 }
 
 # These need to be overridden so the method in UKCouncils doesn't create
@@ -246,6 +231,7 @@ sub dashboard_export_problems_add_columns {
     $csv->modify_csv_header( Ward => 'Borough' );
 
     $csv->add_csv_columns(
+        bike_number => "Bike number",
         agent_responsible => "Agent responsible",
         safety_critical => "Safety critical",
         delivered_to => "Delivered to",
@@ -286,6 +272,7 @@ sub dashboard_export_problems_add_columns {
         my $user_name_display = $report->anonymous
             ? '(anonymous ' . $report->id . ')' : $report->name;
 
+        my $bike_number = $report->get_extra_field_value('Question') || '';
         my $safety_critical = $report->get_extra_field_value('safety_critical') || 'no';
         my $delivered_to = $report->get_extra_metadata('sent_to') || [];
         my $closure_email_at = $report->get_extra_metadata('closure_alert_sent_at') || '';
@@ -301,6 +288,7 @@ sub dashboard_export_problems_add_columns {
             closure_email_at => $closure_email_at,
             reassigned_at => $reassigned_at,
             reassigned_by => $reassigned_by,
+            bike_number => $bike_number,
         };
         foreach (@{$report->get_extra_fields}) {
             next if $_->{name} eq 'safety_critical';
@@ -379,6 +367,8 @@ sub report_new_munge_before_insert {
 
 sub report_new_is_on_tlrn {
     my ( $self ) = @_;
+
+    return if FixMyStreet->test_mode eq 'cypress';
 
     my ($x, $y) = Utils::convert_latlon_to_en(
         $self->{c}->stash->{latitude},
@@ -465,14 +455,22 @@ sub munge_red_route_categories {
     }
 }
 
+sub validate_contact_email {
+    my ( $self, $email ) = @_;
+
+    my $email_addresses = $self->feature('borough_email_addresses');
+    for my $borough_email (keys %$email_addresses) {
+        return 1 if $borough_email eq $email;
+    };
+}
+
 around 'munge_sendreport_params' => sub {
     my ($orig, $self, $row, $h, $params) = @_;
 
     $self->$orig($row, $h, $params);
 
-    if ($row->category eq "Countdown - not working") {
-        $params->{From} = [ $self->do_not_reply_email, $self->contact_name ];
-    }
+    $params->{From} = [ $self->do_not_reply_email, $self->contact_name ];
+    delete $params->{'Reply-To'} if $params->{'Reply-To'};
 };
 
 sub is_hardcoded_category {
@@ -539,6 +537,7 @@ sub _cleaning_categories { [
     'Fly-Tipping',
     'Fly tipping - Enforcement Request',
     'Graffiti and Flyposting', # Bromley
+    'Street cleaning/sweeping', # Camden
 
     # Merton want all of their street cleaning categories visible on Red Routes
     'Abandoned Vehicles',
@@ -548,9 +547,10 @@ sub _cleaning_categories { [
     'Fly-Posting',
     'Graffiti',
     'Litter or Weeds on a Street',
+    'Faulty Christmas Lights',
 ] }
 
-sub _cleaning_groups { [ 'Street cleaning', 'Fly-tipping' ] }
+sub _cleaning_groups { [ 'Street cleaning', 'Street Cleansing', 'Fly-tipping' ] }
 
 sub _tfl_council_categories { [
     'General Litter / Rubbish Collection',
@@ -558,7 +558,6 @@ sub _tfl_council_categories { [
 ] }
 
 sub _tfl_no_resend_categories { [
-    'Countdown - not working',
     'General Litter / Rubbish Collection',
     'Flytipping (TfL)',
     'Other (TfL)',

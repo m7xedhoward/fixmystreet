@@ -2,18 +2,73 @@
 
 * Unreleased
     - Front end improvements:
+        - Enable keyboard navigation of map. #3321
         - Highlight pin on sidebar focus as well as hover.
         - Map page pagination links now styled as links rather than buttons. #3727
         - Include username in inactive email.
+        - Update document title on client-side new report page transition.
+        - Disable staff phone and name fields to avoid accidental overwriting.
+        - Hide 'Assigned to' text if a report is not assigned to anyone
+        - Hide 'Assign to' dropdown if no available assignees
+        - Allow 'Asset ID' (part of optional extra data displayed for a report) to be customisable for all cobrands
+        - Add initial update template on report sending, not creation.
+        - Add option to set an emergency message on reporting pages.
+        - Add label to questionnaire textarea. #3944
     - Bugfixes:
         - Add ID attributes to change password form inputs.
         - Fix link deactivation for privacy policy link on privacy policy page. #3704
+        - Fix dashboard rows for categories with &s.
+        - Make calls from Geocoder files to https rather than http
+        - Inspector dropdown list only shows name once even if permissions repeated #3870
+        - Inspector dropdown list doesn't show anonymised users, removing blank options #3873
+        - Fix report unassignment so it works for users who did not create the report #3903
+        - [Open311] External code removal is not a change.
+        - Trim whitespace on extra status codes for response templates
+        - The permission default_to_body now also affects updates. #3317
+        - Decouple the permission to manage shortlist from default_to_body. #3317
+        - Fix issue with sanitizing missing attributes.
+        - Include email_text from templates in export-import-data script. #4084
+        - Stop map moving when navigating through images with arrow keys.
+        - Remember category group through OpenID login.
+        - For CSV export, fetch children of all generations.
+        - Reset subcategory selection on clicking browser 'back' button during new report journey
+        - Fix JS error going back from page to report page to map page
+    - Accessibility improvements:
+        - The "skip map" link on /around now has new wording. #3794
+        - Improve visual contrast of pagination links. #3794
+        - Make map pan/zoom controls keyboard-accessible. #3751
+        - Add missing label to alert distance input.
+        - Give generated map tiles blank alt attribute.
+        - Add fieldset to alert list and improve sort order.
+        - Remove unnecessary and add some missing fieldsets.
+        - Improve fancybox accessibility (text and focus).
+        - Add visually-hidden nearest address in report list.
+    - Admin improvements:
+        - Admin 'add user' form now always creates staff users
+        - Make sure staff permissions removed when anonymized.
+        - Add role filter to dashboard interface.
+        - Alerts are paginated on user edit page. #4158
+        - Restrict flagging users and reports to superusers.
+        - Display photos in report moderation updates, rather than just the image hashes.
     - Development improvements:
         - Default make_css to `web/cobrands` rather than `web`.
         - Ability to pass custom arguments (eg: SSL config) to server when running via Docker
         - Allow bin/fetch start/end times to be fractional.
+        - Add an --exclude option to bin/fetch.
+        - Add an index on problem(external_id) to speed up bin/fetch --updates
+        - Upgrade Net::DNS and libwww to deal with IPv6 issues.
+        - Add send_state column to updates. #3865
+        - Enable alternative response from templates to be emailed to issue reporter. #4001
+        - Option to read asset layers from configuration.
+        - Add GitHub Action to generate POD documentation.
+        - Use digest rather than last modified time for static versioning. #4280
+    - Security
+        - Permit control over database connection `sslmode` via $FMS_DB_SSLMODE
     - Open311 improvements:
         - Increase default timeout.
+        - Check for an identical latest update when adding a new one.
+    - UK:
+        - Add CAPTCHA to contact form for non-UK IP addresses
 
 * v4.0 (3rd December 2021)
     - Front end improvements:
@@ -86,6 +141,8 @@
         - Allow throttling by user login attempts
     - Changes
         - Send contact form emails from do-not-reply address if sender's domain uses DMARC.
+    - New features:
+        - Roles can now have category restrictions like users.
 
 * v3.1 (16th November 2020)
     - Security:

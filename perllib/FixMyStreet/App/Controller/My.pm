@@ -140,9 +140,12 @@ sub get_problems : Private {
         "$table.state" => [ keys %$states ],
     };
 
+    # We do not want to show bulky goods cancellation reports
+    $params->{"$table.category"}{'!='} = 'Bulky cancel';
+
     my $categories = [ $c->get_param_list('filter_category', 1) ];
     if ( @$categories ) {
-        $params->{"$table.category"} = $categories;
+        $params->{"$table.category"}{'='} = $categories;
         $c->stash->{filter_category} = { map { $_ => 1 } @$categories };
     }
 
@@ -191,6 +194,7 @@ sub setup_page_data : Private {
     my $table = $c->action eq 'my/planned' ? 'report' : 'me';
     my @categories = $c->stash->{problems_rs}->search({
         "$table.state" => [ FixMyStreet::DB::Result::Problem->visible_states() ],
+        "$table.category" => { '!=', 'Bulky cancel' },
     }, {
         join => 'contact',
         columns => [ "$table.category", 'contact.extra', 'contact.category' ],
@@ -286,7 +290,9 @@ sub bulk_assign : Path('planned/bulk_assign') {
             # take off shortlist
             my @problems = $c->model('DB::Problem')->search({ id => { -in => [ @bulk_reports ]} });
             foreach my $problem (@problems) {
-                $problem->user->remove_from_planned_reports($problem);
+                my $current_assignee = $problem->shortlisted_user;
+                $current_assignee->remove_from_planned_reports($problem)
+                    if $current_assignee;
             }
         } else {
             # add to shortlist

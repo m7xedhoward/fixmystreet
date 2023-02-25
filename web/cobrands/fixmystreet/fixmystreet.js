@@ -78,7 +78,6 @@ function isR2L() {
                         $ajax_result.html('<p style="text-align:center">Loading</p>');
                         $ajax_result.load(href);
                     }
-
                     // Style up the $drawer
                     drawer_top = $(window).height() - $sw.height();
                     var drawer_css = {
@@ -99,6 +98,8 @@ function isR2L() {
 
                 // Insert the .shadow-wrap controls into the top of the drawer.
                 $sw.addClass('static').prependTo($drawer);
+                $('#key-tools').addClass('area-js');
+                $('#key-tool-wards').addClass('hover');
 
                 // Animate the drawer into place, enitrely covering the sidebar.
                 var sidebar_top_px = $sidebar.position().top;
@@ -137,8 +138,14 @@ function isR2L() {
             settings.presets = [];
             settings.presets.push({
                 name: settings.allText,
-                all: true
             });
+
+            if ($select.data('all-options')) {
+                settings.presets[0].options = $select.data('all-options');
+            }
+            else {
+                settings.presets[0].all = true;
+            }
         }
 
         if ( $select.data('extra') && $select.data('extra-options') ) {
@@ -434,7 +441,8 @@ $.extend(fixmystreet.set_up, {
         errorElement: 'div',
         errorClass: 'form-error',
         errorPlacement: function( error, element ) {
-            if (element.attr('type') == 'radio') {
+            var typ = element.attr('type');
+            if (typ == 'radio' || typ == 'checkbox') {
                 element.parent().before( error );
             } else {
                 element.before( error );
@@ -514,12 +522,26 @@ $.extend(fixmystreet.set_up, {
 
   autocomplete: function() {
     $('.js-autocomplete').each(function() {
+        var $this = $(this);
         accessibleAutocomplete.enhanceSelectElement({
             selectElement: this,
             displayMenu: 'overlay',
-            required: true,
-            // showAllValues: true, // Currently undismissable on iOS
-            defaultValue: ''
+            required: $(this).prop('required') ? true : false,
+            showAllValues: true,
+            defaultValue: '',
+            confirmOnBlur: false,
+            onConfirm: function(label) {
+                // If the user selects a value in the autocomplete dropdown, update the hidden 'select' element.
+                // https://github.com/alphagov/accessible-autocomplete/issues/322
+                var match = [].filter.call(this.selectElement.options, function(e){
+                    return (e.textContent||e.innerText) === label;
+                })[0];
+                if (match) {
+                    match.selected = true;
+                    // Trigger a change event
+                    $this.trigger("change");
+                }
+            }
         });
     });
   },
@@ -747,106 +769,113 @@ $.extend(fixmystreet.set_up, {
       // Internal $context is the individual form with the photo upload inside
       var $context = $(this);
       var $originalLabel = $('[for="form_photo"], .js-photo-label', $context);
-      var $originalInput = $('#form_photos, .js-photo-fields', $context);
-      var $dropzone = $('<div tabindex=0>').addClass('dropzone');
-      var $fileid_input = $originalInput.data('upload-field') || 'upload_fileid';
+      var $originalInputs = $('#form_photos, .js-photo-fields', $context);
+      $originalInputs.each(function() {
+        var $originalInput = $(this);
+        var $dropzone = $('<div tabindex=0>').addClass('dropzone');
+        var $fileid_input = $originalInput.data('upload-field') || 'upload_fileid';
+        var max_photos = !isNaN($originalInput.data('max-photos')) ? $originalInput.data('max-photos') : 3;
 
-      $originalLabel.removeAttr('for');
-      $('[data-plural]', $originalLabel).text(
-          $('[data-plural]', $originalLabel).attr('data-plural')
-      );
-      $originalInput.hide();
+        $('[data-plural]', $originalLabel).text(
+            $('[data-plural]', $originalLabel).attr('data-plural')
+        );
+        $originalInput.hide();
 
-      $dropzone.insertAfter($originalInput);
-      var default_message = translation_strings.upload_default_message;
-      if ($("html").hasClass("mobile")) {
-        default_message = translation_strings.upload_default_message_mobile;
-      }
-      var photodrop = new Dropzone($dropzone[0], {
-        url: '/photo/upload',
-        paramName: 'photo',
-        maxFiles: 3,
-        addRemoveLinks: true,
-        thumbnailHeight: 150,
-        thumbnailWidth: 150,
-        resizeWidth: 2048,
-        resizeHeight: 2048,
-        resizeQuality: 0.6,
-        acceptedFiles: 'image/jpeg,image/pjpeg,image/gif,image/tiff,image/png,.png,.tiff,.tif,.gif,.jpeg,.jpg',
-        dictDefaultMessage: default_message,
-        dictCancelUploadConfirmation: translation_strings.upload_cancel_confirmation,
-        dictInvalidFileType: translation_strings.upload_invalid_file_type,
-        dictMaxFilesExceeded: translation_strings.upload_max_files_exceeded,
+        $dropzone.insertAfter($originalInput);
+        var default_message = translation_strings.upload_default_message;
+        if ($("html").hasClass("mobile")) {
+            default_message = translation_strings.upload_default_message_mobile;
+        }
+        var photodrop = new Dropzone($dropzone[0], {
+            url: '/photo/upload',
+            paramName: 'photo',
+            maxFiles: max_photos,
+            addRemoveLinks: true,
+            thumbnailHeight: 150,
+            thumbnailWidth: 150,
+            resizeWidth: 2048,
+            resizeHeight: 2048,
+            resizeQuality: 0.6,
+            acceptedFiles: 'image/jpeg,image/pjpeg,image/gif,image/tiff,image/png,.png,.tiff,.tif,.gif,.jpeg,.jpg',
+            dictDefaultMessage: default_message,
+            dictCancelUploadConfirmation: translation_strings.upload_cancel_confirmation,
+            dictInvalidFileType: translation_strings.upload_invalid_file_type,
+            dictMaxFilesExceeded: translation_strings.upload_max_files_exceeded,
 
-        fallback: function() {
-          $dropzone.remove();
-          $originalLabel.attr('for', 'form_photo');
-          $('[data-singular]', $originalLabel).text(
-              $('[data-singular]', $originalLabel).attr('data-singular')
-          );
-          $originalInput.show();
-        },
-        init: function() {
-          this.on("addedfile", function(file) {
-            $('input[type=submit]', $context).prop("disabled", true).removeClass('green-btn');
-          });
-          this.on("queuecomplete", function() {
-            $('input[type=submit]', $context).prop('disabled', false).addClass('green-btn');
-          });
-          this.on("success", function(file, xhrResponse) {
-            var $upload_fileids = $('input[name=' + $fileid_input + ']', $context);
-            var ids = [];
-            // only split if it has a value otherwise you get a spurious empty string
-            // in the array as split returns the whole string if no match
-            if ( $upload_fileids.val() ) {
-                ids = $upload_fileids.val().split(',');
-            }
-            var id = (file.server_id = xhrResponse.id),
-                l = ids.push(id);
-            newstr = ids.join(',');
-            $upload_fileids.val(newstr);
-          });
-          this.on("error", function(file, errorMessage, xhrResponse) {
-          });
-          this.on("removedfile", function(file) {
-            var $upload_fileids = $('input[name=' + $fileid_input + ']', $context);
-            var ids = $upload_fileids.val().split(','),
-                newstr = $.grep(ids, function(n) { return (n!=file.server_id); }).join(',');
-            $upload_fileids.val(newstr);
-          });
-          this.on("maxfilesexceeded", function(file) {
-            this.removeFile(file);
-            var $message = $('<div class="dz-message dz-error-message">');
-            $message.text(translation_strings.upload_max_files_exceeded);
-            $message.prependTo(this.element);
-            setTimeout(function() {
-              $message.slideUp(250, function() {
-                $message.remove();
+            fallback: function() {
+              $dropzone.remove();
+              $('[data-singular]', $originalLabel).text(
+                $('[data-singular]', $originalLabel).attr('data-singular')
+              );
+              $originalInput.show();
+            },
+            init: function() {
+              this.on("addedfile", function(file) {
+                $('input[type=submit]', $context).prop("disabled", true).removeClass('green-btn');
               });
-            }, 2000);
-          });
-        }
-      });
+              this.on("queuecomplete", function() {
+                $('input[type=submit]', $context).prop('disabled', false).addClass('green-btn');
+              });
+              this.on("success", function(file, xhrResponse) {
+                var $upload_fileids = $('input[name="' + $fileid_input + '"]', $context);
+                var ids = [];
+                // only split if it has a value otherwise you get a spurious empty string
+                // in the array as split returns the whole string if no match
+                if ( $upload_fileids.val() ) {
+                    ids = $upload_fileids.val().split(',');
+                }
+                var id = (file.server_id = xhrResponse.id),
+                    l = ids.push(id);
+                newstr = ids.join(',');
+                $upload_fileids.val(newstr);
+              });
+              this.on("error", function(file, errorMessage, xhrResponse) {
+              });
+              this.on("removedfile", function(file) {
+                var $upload_fileids = $('input[name="' + $fileid_input + '"]', $context);
+                var ids = $upload_fileids.val().split(','),
+                    newstr = $.grep(ids, function(n) { return (n!=file.server_id); }).join(',');
+                $upload_fileids.val(newstr);
+              });
+              this.on("maxfilesexceeded", function(file) {
+                this.removeFile(file);
+                var $message = $('<div class="dz-message dz-error-message">');
+                $message.text(translation_strings.upload_max_files_exceeded);
+                $message.prependTo(this.element);
+                setTimeout(function() {
+                $message.slideUp(250, function() {
+                    $message.remove();
+                });
+                }, 2000);
+              });
+            }
+        });
 
-      $dropzone.on('keydown', function(e) {
-          if (e.keyCode === 13 || e.keyCode === 32) {
-              $dropzone.trigger('click');
-          }
-      });
+        // Delete pictures when item is deleted on bulky waste
+        $(this).closest('.bulky-item-wrapper').find('.delete-item').click(function(){
+            photodrop.removeAllFiles(true);
+        });
 
-      $.each($('input[name=' + $fileid_input + ']', $context).val().split(','), function(i, f) {
-        if (!f) {
-            return;
-        }
-        var mockFile = { name: f, server_id: f, dataURL: '/photo/temp.' + f };
-        photodrop.emit("addedfile", mockFile);
-        photodrop.createThumbnailFromUrl(mockFile,
-            photodrop.options.thumbnailWidth, photodrop.options.thumbnailHeight,
-            photodrop.options.thumbnailMethod, true, function(thumbnail) {
-                photodrop.emit('thumbnail', mockFile, thumbnail);
-            });
-        photodrop.emit("complete", mockFile);
-        photodrop.options.maxFiles -= 1;
+        $dropzone.on('keydown', function(e) {
+            if (e.keyCode === 13 || e.keyCode === 32) {
+                $dropzone.trigger('click');
+            }
+        });
+
+        $.each($('input[name="' + $fileid_input + '"]', $context).val().split(','), function(i, f) {
+            if (!f) {
+                return;
+            }
+            var mockFile = { name: f, server_id: f, dataURL: '/photo/temp.' + f };
+            photodrop.emit("addedfile", mockFile);
+            photodrop.createThumbnailFromUrl(mockFile,
+                photodrop.options.thumbnailWidth, photodrop.options.thumbnailHeight,
+                photodrop.options.thumbnailMethod, true, function(thumbnail) {
+                    photodrop.emit('thumbnail', mockFile, thumbnail);
+                });
+            photodrop.emit("complete", mockFile);
+            photodrop.options.maxFiles -= 1;
+        });
       });
     });
   },
@@ -856,12 +885,25 @@ $.extend(fixmystreet.set_up, {
     // to refresh the map when the filter inputs are changed.
     $(".report-list-filters [type=submit]").hide();
 
+    // There are also other uses of this besides report list filters activated here
     $('.js-multiple').make_multi();
+
+    function update_label(id, str) {
+        $(id).prev('label').addClass('hidden-js').after(function(){ return $('<span>' + this.innerHTML + '</span>'); });
+        $(id).next('.multi-select-container').children('.multi-select-button').attr('aria-label', str);
+    }
+    update_label('#statuses', translation_strings.select_status_aria_label);
+    update_label('#filter_categories', translation_strings.select_category_aria_label);
   },
 
-  mobile_ui_tweaks: function() {
-    //move 'skip this step' link on mobile
-    $('.mobile #skip-this-step').addClass('chevron').wrap('<li>').parent().appendTo('#key-tools');
+  label_accessibility_update: function() {
+    // Replace unnecessary labels with a span and include a
+    // proper aria-label to improve accessibility.
+    function replace_label(id, sibling_class, sibling_child, str) {
+        $(id).siblings(sibling_class).children(sibling_child).attr('aria-label', str);
+        $(id).addClass('hidden-js').after(function(){ return $('<span>' + this.innerHTML + '</span>'); });
+    }
+    replace_label('#photo-upload-label','.dropzone.dz-clickable', '.dz-default.dz-message', translation_strings.upload_aria_label);
   },
 
   // Very similar function in front.js for front page
@@ -889,7 +931,7 @@ $.extend(fixmystreet.set_up, {
         nav.style.maxHeight = h + 'px';
         modal.style.top = nav_top + 'px';
       }
-      nav_link.setAttribute('aria-expanded', opened);
+      nav_checkbox.setAttribute('aria-expanded', opened);
       nav_checkbox.checked = opened;
     };
 
@@ -1024,8 +1066,9 @@ $.extend(fixmystreet.set_up, {
   ward_select_multiple: function() {
     $(".js-ward-select-multiple").on('click', function(e) {
         e.preventDefault();
-        $(".js-ward-single").addClass("hidden");
-        $(".js-ward-multi").removeClass("hidden");
+        var sect = $(this).closest('section');
+        sect.find(".js-ward-single").addClass("hidden");
+        sect.find(".js-ward-multi").removeClass("hidden");
     });
   },
 
@@ -1472,10 +1515,13 @@ function re_select(group, category) {
 
 // On the new report form, does this by asking for details from the server.
 fixmystreet.fetch_reporting_data = function() {
+    var he_arg = window.location.href.indexOf('&he_referral=1');
+    he_arg = he_arg === -1 ? 0 : 1;
     $.getJSON('/report/new/ajax', {
         w: 1,
         latitude: $('#fixmystreet\\.latitude').val(),
-        longitude: $('#fixmystreet\\.longitude').val()
+        longitude: $('#fixmystreet\\.longitude').val(),
+        he_referral: he_arg
     }, function(data) {
         if (data.error) {
             if (!$('#side-form-error').length) {
@@ -1486,6 +1532,7 @@ fixmystreet.fetch_reporting_data = function() {
             $('body').removeClass('with-notes');
             return;
         }
+        $('#side-form-error').hide();
         $('#side-form').show();
         var selected = fixmystreet.reporting.selectedCategory(),
             old_category_group = selected.group || $('#filter_group').val() || '',
@@ -1527,8 +1574,14 @@ fixmystreet.fetch_reporting_data = function() {
 
         $('#form_category_row').html(data.category);
         $('#form_subcategory_row').html(data.subcategories);
-        re_select(old_category_group, old_category);
+        if (data.preselected && (data.preselected.category || data.preselected.subcategory)) {
+            re_select(data.preselected.category, data.preselected.subcategory);
+        } else {
+            re_select(old_category_group, old_category);
+        }
         fixmystreet.reporting.topLevelPoke();
+
+        fixmystreet.set_up.fancybox_images(); // In case e.g. top_message has pulled in a fancybox
 
         if ( data.extra_name_info && !$('#form_fms_extra_title').length ) {
             // there might be a first name field on some cobrands
@@ -1652,6 +1705,7 @@ fixmystreet.display = {
     }
 
     fixmystreet.page = 'new';
+    document.title = translation_strings.reporting_a_problem;
 
     fixmystreet.update_report_a_problem_btn();
   },
@@ -1807,6 +1861,7 @@ fixmystreet.display = {
         $('body').removeClass('with-notes');
 
         fixmystreet.page = fixmystreet.original.page;
+        document.title = translation_strings.viewing_a_location;
         if ($('html').hasClass('mobile') && fixmystreet.page == 'around') {
             $('#mob_sub_map_links').remove();
             $('html').removeClass('map-page');
@@ -1875,6 +1930,17 @@ $(function() {
     }
 });
 
+window.addEventListener('pagehide', function(e) {
+    // If we are leaving a page, and we're not being persisted, reset
+    // subcategory selection on new report form. A subcategory may trigger a
+    // stopper message that also disables the form; if the user presses the
+    // back button, we want to re-enable the form.
+    var $subcats = $('input[name^="category."]:checked');
+    if (!e.persisted && $subcats.length) {
+        $subcats.prop('checked', false);
+    }
+});
+
 function setup_popstate() {
     setTimeout(function () {
         if (!window.addEventListener) { return; }
@@ -1892,6 +1958,16 @@ function setup_popstate() {
             if (e.state === null) {
                 // Hashchange or whatever, we don't care.
                 return;
+            }
+
+            // Reset subcategory selection on new report form. A subcategory
+            // may trigger a stopper message that also disables the form; if
+            // the user presses the back button, we want to re-enable the
+            // form.
+            var $subcats = $('input[name^="category."]:checked');
+            var $curr = $('.js-reporting-page--active');
+            if ($curr.data('pageName') == 'subcategory' && $subcats.length) {
+                $subcats.prop('checked', false).trigger('change');
             }
 
             var reports_list_trigger;
@@ -1918,7 +1994,9 @@ function setup_popstate() {
                     var qs = fixmystreet.utils.parse_query_string();
                     page = qs.p || 1;
                     $('#show_old_reports').prop('checked', qs.show_old_reports || '');
-                    fixmystreet.markers.protocol.use_page = true;
+                    if (fixmystreet.markers.protocol) {
+                        fixmystreet.markers.protocol.use_page = true;
+                    }
                     $('.pagination').first().data('page', page);
                 }
                 reports_list_trigger = $('.pagination').first();
@@ -1934,7 +2012,9 @@ function setup_popstate() {
                     saveHistoryState: false
                 });
             } else if ('page_change' in e.state) {
-                fixmystreet.markers.protocol.use_page = true;
+                if (fixmystreet.markers.protocol) {
+                    fixmystreet.markers.protocol.use_page = true;
+                }
                 $('#show_old_reports').prop('checked', e.state.page_change.show_old_reports);
                 $('.pagination').first().data('page', e.state.page_change.page);
                 reports_list_trigger = $('.pagination').first();

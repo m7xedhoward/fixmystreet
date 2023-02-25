@@ -1,0 +1,48 @@
+#!/usr/bin/env perl
+
+# call-wasteworks-backend
+# Call the Echo or Bartec API in parallel
+
+use v5.14;
+use warnings;
+
+BEGIN {
+    use File::Basename qw(dirname);
+    use File::Spec;
+    my $d = dirname(File::Spec->rel2abs($0));
+    require "$d/../../setenv.pl";
+}
+
+use Getopt::Long::Descriptive;
+use JSON::MaybeXS;
+use Storable;
+use Integrations::Echo;
+use Integrations::Bartec;
+use FixMyStreet;
+
+my ($opts, $usage) = describe_options(
+    '%c %o',
+    ['cobrand=s', 'which cobrand configuration to use'],
+    ['backend=s', 'which backend type (echo/bartec)'],
+    ['out=s', 'where to output data'],
+    ['calls=s', 'JSON of what API calls to make'],
+    ['help|h', "print usage message and exit" ],
+);
+$usage->die if $opts->help;
+$usage->die unless $opts->cobrand && $opts->calls && $opts->backend;
+
+# Doing it this way, rather than creating the cobrand object and calling
+# feature() is much quicker for a command line script
+my $features = FixMyStreet->config('COBRAND_FEATURES');
+my $cfg = $features->{$opts->backend}->{$opts->cobrand};
+
+my $class = $opts->backend eq 'echo' ? 'Integrations::Echo' : 'Integrations::Bartec';
+my $integration = $class->new(%$cfg);
+
+my $calls = decode_json($opts->calls);
+$calls = $integration->_parallel_api_calls(@$calls);
+if ($opts->out) {
+    Storable::store($calls, $opts->out);
+} else {
+    print encode_json($calls);
+}

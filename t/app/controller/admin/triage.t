@@ -11,14 +11,14 @@ my $superuser = $mech->create_user_ok(
     is_superuser => 1
 );
 
-my $iow = $mech->create_body_ok(2636, 'Isle of Wight Council', { can_be_devolved => 1 } );
+my $iow = $mech->create_body_ok(2636, 'Isle of Wight Council', { can_be_devolved => 1 }, { cobrand => 'isleofwight' } );
 my $iow_contact = $mech->create_contact_ok(
     body_id     => $iow->id,
     category    => 'Potholes',
     email       => 'potholes@example.com',
     send_method => 'Triage'
 );
-$mech->create_contact_ok(
+my $traffic_lights = $mech->create_contact_ok(
     body_id  => $iow->id,
     category => 'Traffic lights',
     email    => 'lights@example.com'
@@ -111,7 +111,7 @@ FixMyStreet::override_config {
 
         $mech->submit_form_ok( {
                 with_fields => {
-                    category => 'Traffic lights',
+                    category => $traffic_lights->id,
                     include_update => 0,
                 }
             },

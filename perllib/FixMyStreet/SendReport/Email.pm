@@ -81,7 +81,7 @@ sub send {
 
     unless ($recips) {
         $self->error( 'No recipients' );
-        return 1;
+        return;
     }
 
     my ($verbose, $nomail) = CronFns::options();
@@ -92,14 +92,10 @@ sub send {
         To => $self->to,
     };
 
-    $cobrand->call_hook(munge_sendreport_params => $row, $h, $params);
-
     $params->{Bcc} = $self->bcc if @{$self->bcc};
 
     my $sender = $self->envelope_sender($row);
-    if ($params->{From}) {
-        # Don't do anything if something has been included already
-    } elsif ($row->user->email && $row->user->email_verified) {
+    if ($row->user->email && $row->user->email_verified) {
         $params->{From} = $self->send_from( $row );
     } else {
         my $name = sprintf(_("On behalf of %s"), @{ $self->send_from($row) }[1]);
@@ -116,6 +112,8 @@ sub send {
         $params->{From} = [ $sender, $params->{From}[1] ];
     }
 
+    $cobrand->call_hook(munge_sendreport_params => $row, $h, $params);
+
     my $result = FixMyStreet::Email::send_cron($row->result_source->schema,
         $self->get_template($row), {
             %$h,
@@ -129,8 +127,6 @@ sub send {
     } else {
         $self->error( 'Failed to send email' );
     }
-
-    return $result;
 }
 
 sub email_list {

@@ -336,15 +336,15 @@ for my $body (
     { area_id => 2651, name => 'City of Edinburgh Council' },
     { area_id => 2226, name => 'Gloucestershire County Council' },
     { area_id => 2326, name => 'Cheltenham Borough Council' },
-    { area_id => 2333, name => 'Hart Council' },
-    { area_id => 2227, name => 'Hampshire County Council' },
+    { area_id => 2333, name => 'Hart Council', cobrand => 'hart' },
+    { area_id => 2227, name => 'Hampshire County Council', cobrand => 'hampshire' },
     { area_id => 14279, name => 'Ballymoney Borough Council' },
-    { area_id => 2636, name => 'Isle of Wight Council' },
+    { area_id => 2636, name => 'Isle of Wight Council', cobrand => 'isleofwight' },
     { area_id => 2649, name => 'Fife Council' },
     { area_id => 14279, name => 'TransportNI (Western)' },
 ) {
     my $aid = $body->{area_id};
-    my $body = $mech->create_body_ok($aid, $body->{name});
+    my $body = $mech->create_body_ok($aid, $body->{name}, {}, { cobrand => $body->{cobrand} });
     if ($body_ids{$aid}) {
         $body_ids{$aid} = [ $body_ids{$aid}, $body->id ];
     } else {
@@ -588,6 +588,7 @@ subtest 'check can set multiple emails as a single contact' => sub {
         name => 'Test User',
         cobrand => 'fixmystreet',
         send_fail_count => 0,
+        send_fail_body_ids => [],
     } );
 
     FixMyStreet::override_config $override, sub {

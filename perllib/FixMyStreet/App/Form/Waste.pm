@@ -18,6 +18,7 @@ before _process_page_array => sub {
 # Add some functions to the form to pass through to the current page
 has '+current_page' => (
     handles => {
+        intro_template => 'intro',
         title => 'title',
         template => 'template',
     }
@@ -45,6 +46,7 @@ before after_build => sub {
     my $c = $self->c;
 
     map { $saved_data->{$_} = 1 } grep { /^(service|container)-/ && $c->req->params->{$_} } keys %{$c->req->params};
+    $saved_data->{'container-choice'} = $c->get_param('container-choice') if $c->get_param('container-choice');
 };
 
 sub validate {

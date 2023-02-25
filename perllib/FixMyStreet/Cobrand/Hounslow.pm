@@ -13,7 +13,7 @@ sub council_area { 'Hounslow' }
 sub council_name { 'Hounslow Highways' }
 sub council_url { 'hounslow' }
 
-sub map_type { 'Hounslow' }
+# sub map_type { 'Hounslow' }
 
 sub enter_postcode_text {
     my ($self) = @_;
@@ -95,7 +95,8 @@ sub open311_post_send {
 
     my $e = join( '@', 'enquiries', $self->council_url . 'highways.org' );
     my $sender = FixMyStreet::SendReport::Email->new( to => [ [ $e, 'Hounslow Highways' ] ] );
-    if (!$sender->send($row, $h)) {
+    $sender->send($row, $h);
+    if ($sender->success) {
         $row->set_extra_metadata('hounslow_email_sent', 1);
     }
 }

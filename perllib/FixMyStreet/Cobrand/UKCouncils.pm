@@ -11,6 +11,7 @@ use LWP::Simple;
 use URI;
 use Try::Tiny;
 use JSON::MaybeXS;
+use XML::Simple;
 
 sub is_council {
     1;
@@ -50,20 +51,18 @@ sub restriction {
     return { cobrand => shift->moniker };
 }
 
-# UK cobrands assume that each MapIt area ID maps both ways with one
-# body. Except TfL and National Highways.
-sub body {
-    my $self = shift;
-    my $body = FixMyStreet::DB->resultset('Body')->for_areas($self->council_area_id)->search({ name => { 'not_in', ['TfL', 'National Highways', 'Environment Agency'] } })->first;
-    return $body;
-}
-
 sub cut_off_date { '' }
 
 sub problems_restriction {
     my ($self, $rs) = @_;
     return $rs if FixMyStreet->staging_flag('skip_checks');
-    $rs = $rs->to_body($self->body);
+
+    my $bodies = $self->body;
+    if ($self->can('problems_restriction_bodies')) {
+        $bodies = $self->problems_restriction_bodies;
+    }
+    $rs = $rs->to_body($bodies);
+
     if (my $date = $self->cut_off_date) {
         my $table = ref $rs eq 'FixMyStreet::DB::ResultSet::Nearby' ? 'problem' : 'me';
         $rs = $rs->search({
@@ -170,10 +169,15 @@ sub area_check {
     return 1 if FixMyStreet->staging_flag('skip_checks');
 
     my $councils = $params->{all_areas};
-    my $council_match = defined $councils->{$self->council_area_id};
-    if ($council_match) {
-        return 1;
+
+    # The majority of cobrands only cover a single area, but e.g. Northamptonshire
+    # covers multiple so we need to handle that situation.
+    my $council_area_ids = $self->council_area_id;
+    $council_area_ids = [ $council_area_ids ] unless ref $council_area_ids eq 'ARRAY';
+    foreach (@$council_area_ids) {
+        return 1 if defined $councils->{$_};
     }
+
     return ( 0, $self->area_check_error_message($params, $context) );
 }
 
@@ -230,7 +234,8 @@ sub recent_photos {
     return $self->problems->recent_photos( $num, $lat, $lon, $dist );
 }
 
-# Returns true if the cobrand owns the problem.
+# Returns true if the cobrand owns the problem, i.e. it was sent to the body
+# associated with this cobrand.
 sub owns_problem {
     my ($self, $report) = @_;
     my @bodies;
@@ -241,9 +246,10 @@ sub owns_problem {
     } else { # Object
         @bodies = values %{$report->bodies};
     }
-    # Want to ignore the TfL body that covers London councils, and HE that is all England
-    my %areas = map { %{$_->areas} } grep { $_->name !~ /TfL|National Highways/ } @bodies;
-    return $areas{$self->council_area_id} ? 1 : undef;
+
+    foreach (@bodies) {
+        return 1 if $_->get_extra_metadata('cobrand', '') eq $self->moniker;
+    }
 }
 
 # If the council is two-tier, or e.g. TfL reports,
@@ -291,7 +297,7 @@ sub admin_allow_user {
     return undef unless defined $user->from_body;
     # Make sure TfL staff can't access other London cobrand admins
     return undef if $user->from_body->name eq 'TfL';
-    return $user->from_body->areas->{$self->council_area_id};
+    return $user->from_body->get_extra_metadata('cobrand', '') eq $self->moniker;
 }
 
 sub admin_show_creation_graph { 0 }
@@ -311,6 +317,32 @@ sub available_permissions {
 sub prefill_report_fields_for_inspector { 1 }
 
 sub social_auth_disabled { 1 }
+
+# By default for UK councils, we send confirmation emails
+# only for Waste reports
+sub report_sent_confirmation_email {
+    my ($self, $report) = @_;
+    return 'Report ID if WasteWorks report' unless $report; # no report passed when called from /admin/config template
+    my $contact = $report->contact or return;
+    return 'id' if $report->contact->get_extra_metadata('type', '') eq 'waste';
+    return '';
+}
+
+sub munge_around_category_where {
+    my ($self, $where) = @_;
+    $where->{extra} = [ undef, { -not_like => '%,T4:type,T5:waste,%' } ];
+}
+
+sub munge_reports_category_list {
+    my ($self, $categories) = @_;
+    my $c = $self->{c};
+    return if $c->action eq 'dashboard/heatmap';
+
+    unless ( $c->user_exists && $c->user->from_body && $c->user->has_permission_to('report_mark_private', $self->body->id) ) {
+        @$categories = grep { $_->get_extra_metadata('type', '') ne 'waste' } @$categories;
+    }
+}
+
 
 sub munge_report_new_bodies {
     my ($self, $bodies) = @_;
@@ -337,10 +369,26 @@ sub munge_report_new_bodies {
     if ( $bodies{'Environment Agency'} ) {
         %$bodies = map { $_->id => $_ } grep { $_->name ne 'Environment Agency' } values %$bodies;
     }
+
+    if ( $bodies{'Thamesmead'} ) {
+        my $thamesmead = FixMyStreet::Cobrand::Thamesmead->new({ c => $self->{c} });
+        $thamesmead->munge_thamesmead_body($bodies);
+    }
 }
 
 sub munge_report_new_contacts {
     my ($self, $contacts) = @_;
+
+    if ($self->{c}->action =~ /^waste/) {
+        @$contacts = grep { $_->get_extra_metadata('type', '') eq 'waste' } @$contacts;
+        return;
+    }
+
+    if ($self->{c}->stash->{categories_for_point}) {
+        # Have come from an admin tool
+    } else {
+        @$contacts = grep { !$_->get_extra_metadata('type') } @$contacts;
+    }
 
     my %bodies = map { $_->body->name => $_->body } @$contacts;
     if ( $bodies{'TfL'} ) {
@@ -348,6 +396,17 @@ sub munge_report_new_contacts {
         my $tfl = FixMyStreet::Cobrand->get_class_for_moniker( 'tfl' )->new({ c => $self->{c} });
         $tfl->munge_red_route_categories($contacts);
     }
+
+    if ( $bodies{'Thamesmead'} ) {
+        my $thamesmead = FixMyStreet::Cobrand::Thamesmead->new({ c => $self->{c} });
+        $thamesmead->munge_categories($contacts);
+    }
+}
+
+sub munge_mixed_category_groups {
+    my ($self, $list) = @_;
+    my $nh = FixMyStreet::Cobrand::HighwaysEngland->new({ c => $self->{c} });
+    $nh->national_highways_cleaning_groups($list);
 }
 
 sub open311_extra_data {
@@ -385,7 +444,7 @@ sub lookup_site_code {
 }
 
 sub _fetch_features {
-    my ($self, $cfg, $x, $y) = @_;
+    my ($self, $cfg, $x, $y, $xml) = @_;
 
     # default to a buffered bounding box around the given point unless
     # a custom filter parameter has been specified.
@@ -397,17 +456,31 @@ sub _fetch_features {
 
     my $uri = $self->_fetch_features_url($cfg);
     my $response = get($uri) or return;
-
-    my $j = JSON->new->utf8->allow_nonref;
-    try {
-        $j = $j->decode($response);
-    } catch {
-        # There was either no asset found, or an error with the WFS
-        # call - in either case let's just proceed without the USRN.
-        return;
-    };
-
-    return $j->{features};
+    if (!$xml) {
+        my $j = JSON->new->utf8->allow_nonref;
+        try {
+            $j = $j->decode($response);
+        } catch {
+            # There was either no asset found, or an error with the WFS
+            # call - in either case let's just proceed without the USRN.
+            return;
+        };
+        return $j->{features};
+    } else {
+        my $x = XML::Simple->new(
+            ForceArray => [ 'gml:featureMember' ],
+            KeyAttr => {},
+            SuppressEmpty => undef,
+        );
+        try {
+            $x = $x->parse_string($response);
+        } catch {
+            # There was either no asset found, or an error with the WFS
+            # call - in either case we'll respond with no asset found
+            return;
+        };
+        return $x->{'gml:featureMember'};
+    }
 }
 
 sub _fetch_features_url {
@@ -489,48 +562,6 @@ sub verp_email_domain {
     my $self = shift;
     return $self->feature('verp_email_domain');
 }
-
-# Allow cobrands to disallow updates on some things.
-# Note this only ever locks down more than the default.
-sub updates_disallowed {
-    my $self = shift;
-    my ($problem) = @_;
-    my $c = $self->{c};
-
-    my $cfg = $self->feature('updates_allowed') || '';
-    if ($cfg eq 'none') {
-        return 1;
-    } elsif ($cfg eq 'staff') {
-        # Only staff and superusers can leave updates
-        my $staff = $c->user_exists && $c->user->from_body && $c->user->from_body->name eq $self->council_name;
-        my $superuser = $c->user_exists && $c->user->is_superuser;
-        return 1 unless $staff || $superuser;
-    }
-
-    if ($cfg =~ /reporter/) {
-        return 1 if !$c->user_exists || $c->user->id != $problem->user->id;
-    }
-    if ($cfg =~ /open/) {
-        return 1 if $problem->is_fixed || $problem->is_closed;
-    }
-
-    return $self->next::method(@_);
-}
-
-# Report if cobrand denies updates by user
-sub deny_updates_by_user {
-    my ($self, $row) = @_;
-    my $cfg = $self->feature('updates_allowed') || '';
-    if ($cfg eq 'none' || $cfg eq 'staff') {
-        return 1;
-    } elsif ($cfg eq 'reporter-open' && !$row->is_open) {
-        return 1;
-    } elsif ($cfg eq 'open' && !$row->is_open) {
-        return 1;
-    } else {
-        return;
-    }
-};
 
 sub extra_contact_validation {
     my $self = shift;

@@ -15,7 +15,8 @@ my $mech = FixMyStreet::TestMech->new;
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 $mech->log_in_ok( $superuser->email );
 my $body = $mech->create_body_ok(2650, 'Aberdeen City Council');
-my $body2 = $mech->create_body_ok(2237, 'Oxfordshire County Council');
+my $body2 = $mech->create_body_ok(2237, 'Oxfordshire County Council', {}, { cobrand => 'oxfordshire' });
+my $bucks = $mech->create_body_ok(2217, 'Buckinghamshire Council', {}, { cobrand => 'buckinghamshire' });
 
 my $user = $mech->create_user_ok('user@example.com', name => 'OCC User', from_body => $body2);
 $user->user_body_permissions->create({ body => $body2, permission_type => 'category_edit' });
@@ -292,6 +293,16 @@ subtest 'test assigned_users_only setting' => sub {
     is $contact->get_extra_metadata('assigned_users_only'), 1;
 };
 
+subtest 'test prefer_if_multiple setting' => sub {
+    $mech->get_ok('/admin/body/' . $body->id . '/test%20category');
+    $mech->submit_form_ok( { with_fields => {
+        prefer_if_multiple => 1,
+    } } );
+    $mech->content_contains('Values updated');
+    my $contact = $body->contacts->find({ category => 'test category' });
+    is $contact->get_extra_metadata('prefer_if_multiple'), 1;
+};
+
 subtest 'updates disabling' => sub {
     $mech->get_ok('/admin/body/' . $body->id . '/test%20category');
     $mech->submit_form_ok( { with_fields => {
@@ -320,6 +331,7 @@ subtest 'allow anonymous reporting' => sub {
 };
 
 }; # END of override wrap
+
 FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     MAPIT_TYPES => [ 'UTA' ],
@@ -328,6 +340,9 @@ FixMyStreet::override_config {
 }, sub {
 
 subtest 'allow anonymous reporting' => sub {
+    $body->discard_changes;
+    $body->set_extra_metadata(cobrand => "anonallowedbycategory");
+    $body->update;
     $mech->get_ok('/admin/body/' . $body->id . '/test%20category');
     $mech->submit_form_ok( { with_fields => {
         anonymous_allowed => 1,
@@ -336,10 +351,29 @@ subtest 'allow anonymous reporting' => sub {
     $mech->content_contains('Values updated');
     my $contact = $body->contacts->find({ category => 'test category' });
     is $contact->get_extra_metadata('anonymous_allowed'), 1, 'Anonymous reports allowed flag set';
+    $body->unset_extra_metadata('cobrand');
+    $body->update;
 };
 
 };
 
+FixMyStreet::override_config {
+    MAPIT_URL => 'http://mapit.uk/',
+    MAPIT_TYPES => [ 'UTA' ],
+    BASE_URL => 'http://www.example.org',
+    ALLOWED_COBRANDS => "fixmystreet",
+}, sub {
+    subtest 'category type changing' => sub {
+        my $contact = $body->contacts->find({ category => 'test category' });
+        foreach ({ type => 'waste', expected => 'waste' }, { type => 'standard', expected => undef }) {
+            $mech->get_ok('/admin/body/' . $body->id . '/test%20category');
+            $mech->submit_form_ok( { with_fields => { type => $_->{type} } } );
+            $mech->content_contains('Values updated');
+            $contact->discard_changes;
+            is $contact->get_extra_metadata('type'), $_->{expected}, 'Correct type set';
+        }
+    };
+};
 
 FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
@@ -512,6 +546,107 @@ subtest 'check hardcoded contact renaming' => sub {
         is $contact->get_extra_metadata('hardcoded'), 1, "non superuser can't remove hardcoding";
 
         $mech->log_out_ok( $user->email );
+    };
+};
+
+
+subtest 'check setting cobrand on body' => sub {
+    FixMyStreet::override_config {
+        MAPIT_URL => 'http://mapit.uk/',
+        'ALLOWED_COBRANDS' => [ 'oxfordshire' ],
+    }, sub {
+        subtest 'staff user cannot see/set cobrand' => sub {
+            $mech->log_in_ok( $user->email );
+            $mech->get_ok('/admin/bodies');
+            $mech->content_lacks('Select a cobrand');
+            $mech->log_out_ok;
+        };
+
+        $mech->log_in_ok( $superuser->email );
+
+        subtest "superuser can set body's cobrand" => sub {
+            $body2->discard_changes;
+            $body2->unset_extra_metadata('cobrand');
+            $body2->update;
+
+            $mech->get_ok('/admin/body/' . $body2->id);
+            $mech->content_contains('Select a cobrand');
+
+            $mech->form_number(3);
+            $mech->submit_form_ok(
+                {
+                    with_fields => {
+                        'extra[cobrand]' => 'oxfordshire'
+                    }
+                }
+            );
+            $mech->content_contains('Values updated');
+
+            $body2->discard_changes;
+            is $body2->get_extra_metadata('cobrand'), 'oxfordshire';
+        };
+
+        subtest "superuser can unset body's cobrand" => sub {
+            $mech->get_ok('/admin/body/' . $body2->id);
+            $mech->form_number(3);
+            $mech->submit_form_ok(
+                {
+                    with_fields => {
+                        'extra[cobrand]' => undef
+                    }
+                }
+            );
+            $mech->content_contains('Values updated');
+
+            $body2->discard_changes;
+            is $body2->get_extra_metadata('cobrand'), '';
+        };
+
+        subtest "cannot use the same cobrand for multiple bodies" => sub {
+            $body2->set_extra_metadata('cobrand', 'oxfordshire');
+            $body2->update;
+
+            $mech->get_ok('/admin/body/' . $body->id);
+            $mech->form_number(3);
+            $mech->submit_form_ok(
+                {
+                    with_fields => {
+                        'extra[cobrand]' => 'oxfordshire'
+                    }
+                }
+            );
+            $mech->content_lacks('Values updated');
+            $mech->content_contains('This cobrand is already assigned to another body: Oxfordshire County Council');
+
+            $body->discard_changes;
+            is $body->get_extra_metadata('cobrand'), undef;
+            $body2->discard_changes;
+            is $body2->get_extra_metadata('cobrand'), 'oxfordshire';
+        };
+    };
+};
+
+subtest 'check parishes work on Bucks okay' => sub {
+    FixMyStreet::override_config {
+        MAPIT_URL => 'http://mapit.uk/',
+        ALLOWED_COBRANDS => [ "buckinghamshire" ],
+    }, sub {
+        $mech->get_ok('/admin/body/' . $bucks->id);
+        # Form has 2508 and 53319 in it, unselected
+        $mech->submit_form_ok({ with_fields => { area_ids => 53319 } });
+        # Body now has 2217 (kept) and 53319
+        is $bucks->body_areas->count, 2;
+    };
+
+    FixMyStreet::override_config {
+        MAPIT_URL => 'http://mapit.uk/',
+        ALLOWED_COBRANDS => [ "fixmystreet" ],
+    }, sub {
+        $mech->get_ok('/admin/body/' . $bucks->id);
+        # Form has only 2508 in it, unselected
+        $mech->submit_form_ok({ with_fields => { name => 'Bucks' } });
+        # Body has 2217 and 53319 kept
+        is $bucks->body_areas->count, 2;
     };
 };
 

@@ -33,10 +33,11 @@ Thus module has utility functions for the FMS project.
 
 =head2 test_mode
 
-    FixMyStreet->test_mode( $bool );
-    my $in_test_mode_bool = FixMyStreet->test_mode;
+    FixMyStreet->test_mode( $type );
+    my $test_mode = FixMyStreet->test_mode;
 
-Put the FixMyStreet into test mode - intended for the unit tests:
+Put the FixMyStreet into test mode, intended for the tests. Anything true
+means in test mode; Perl tests set '1', Cypress sets 'cypress'.
 
     BEGIN {
         use FixMyStreet;
@@ -142,15 +143,16 @@ Most of the values are read from the config file and others are hordcoded here.
 # we use the one that is most similar to DBI's connect.
 
 sub dbic_connect_info {
-    my $class  = shift;
-    my $config = $class->config;
+    my $class   = shift;
+    my $config  = $class->config;
+    my $sslmode = $config->{FMS_DB_SSLMODE} || "prefer";
 
     my $dsn = "dbi:Pg:dbname=" . $config->{FMS_DB_NAME};
     $dsn .= ";host=$config->{FMS_DB_HOST}"
       if $config->{FMS_DB_HOST};
     $dsn .= ";port=$config->{FMS_DB_PORT}"
       if $config->{FMS_DB_PORT};
-    $dsn .= ";sslmode=allow";
+    $dsn .= ";sslmode=$sslmode";
 
     my $user     = $config->{FMS_DB_USER} || undef;
     my $password = $config->{FMS_DB_PASS} || undef;

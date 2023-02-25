@@ -5,6 +5,7 @@ sub council_area_id { 2483 };
 
 package main;
 
+use Test::Deep;
 use Test::MockModule;
 use FixMyStreet::TestMech;
 
@@ -19,14 +20,15 @@ for my $body (
     { area_id => 2651, name => 'City of Edinburgh Council' },
     { area_id => 2226, name => 'Gloucestershire County Council' },
     { area_id => 2326, name => 'Cheltenham Borough Council' },
-    { area_id => 2482, name => 'Bromley Council' },
-    { area_id => 2227, name => 'Hampshire County Council' },
-    { area_id => 2333, name => 'Hart Council' },
+    { area_id => 2482, name => 'Bromley Council', cobrand => 'bromley' },
+    { area_id => 2227, name => 'Hampshire County Council', cobrand => 'hampshire' },
+    { area_id => 2333, name => 'Hart Council', cobrand => 'hart' },
     { area_id => 2535, name => 'Sandwell Borough Council' },
-    { area_id => 1000, name => 'National Highways' },
-    { area_id => 2483, name => 'Hounslow Borough Council' },
+    { area_id => 1000, name => 'National Highways', cobrand => 'highwaysengland' },
+    { area_id => 2483, name => 'Hounslow Borough Council', cobrand => 'hounslow' },
 ) {
-    my $body_obj = $mech->create_body_ok($body->{area_id}, $body->{name});
+    my $extra = { cobrand => $body->{cobrand} } if $body->{cobrand};
+    my $body_obj = $mech->create_body_ok($body->{area_id}, $body->{name}, {}, $extra);
     $body_ids{$body->{area_id}} = $body_obj->id;
 }
 
@@ -510,8 +512,23 @@ foreach my $test (
         extra_fields => { single_body_only => 'National Highways' },
         email_count => 1,
     },
+    {
+        desc => "test prefer_if_multiple only sends to one body",
+        category => 'Street lighting',
+        councils => [ 2326 ],
+        extra_fields => {},
+        email_count => 1,
+        setup => sub {
+            # $contact10 is Cheltenham Borough Council (2326)
+            $contact10->set_extra_metadata(prefer_if_multiple => 1);
+            $contact10->update;
+        },
+    },
 ) {
     subtest $test->{desc} => sub {
+        if ($test->{setup}) {
+            $test->{setup}->();
+        }
 
         # check that the user does not exist
         my $test_email = 'test-2@example.com';
@@ -580,7 +597,7 @@ foreach my $test (
         ok $report, "Found the report";
 
         # Check the report has been assigned appropriately
-        is $report->bodies_str, join(',', @body_ids{@{$test->{councils}}}) || undef;
+        cmp_bag([ split ',', ($report->bodies_str || '') ], [ @body_ids{@{$test->{councils}}} ]);
 
         $mech->content_contains('Thank you for reporting this issue');
 
@@ -655,8 +672,8 @@ subtest "category groups" => sub {
         my $trees_input = $div . '<input[^>]* value=\'Trees\'>\s*';
         my $trees_input_checked = $div . '<input[^>]* value=\'Trees\' checked>\s*';
         $mech->content_like(qr{$pavements_input$pavements_label$roads$trees_input$trees_label</fieldset>});
-        my $streetlighting = $div . '<input[^>]*value=\'Street lighting\'>\s*<label[^>]* for="subcategory_\d+">Street lighting</label>\s*' . $div_end;
-        my $potholes_label = '<label[^>]* for="subcategory_\d+">Potholes</label>\s*' . $div_end;
+        my $streetlighting = $div . '<input[^>]*value=\'Street lighting\'>\s*<label[^>]* for="subcategory_(Roads|Pavements)_\d+">Street lighting</label>\s*' . $div_end;
+        my $potholes_label = '<label[^>]* for="subcategory_(Roads|Pavements)_\d+">Potholes</label>\s*' . $div_end;
         my $potholes_input = $div . '<input[^>]* value=\'Potholes\'>\s*';
         my $potholes_input_checked = $div . '<input[^>]* value=\'Potholes\' checked>\s*';
         my $options = "$potholes_input$potholes_label$streetlighting</fieldset>";

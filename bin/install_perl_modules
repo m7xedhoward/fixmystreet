@@ -4,17 +4,23 @@ set -e
 
 DIR="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd | sed -e 's/\/bin$//' )"
 
+NETDNS_VERSION="$(bin/cron-wrapper perl -MNet::DNS -e'print $Net::DNS::VERSION' 2>/dev/null || true)"
+if [ "$NETDNS_VERSION" == "0.72" ]; then
+    # Net::DNS 1.33 will not install with 0.72 installed
+    bin/cpanm --uninstall --force --local-lib local Net::DNS
+fi
+
 if [ "$1" == "--development" ]; then
     $DIR/vendor/bin/carton install --deployment --without kiitc
 else
     $DIR/vendor/bin/carton install --deployment --without uk --without zurich --without kiitc
 fi
 
-if ! perl -MImage::Magick -e 'exit()' >/dev/null 2>&1
+if ! bin/cron-wrapper perl -MImage::Magick -e 'exit()' >/dev/null 2>&1
 then
     read -p "Image::Magick is not installed. Do you want to attempt to install it?" yn
     case $yn in 
-        [Yy]* ) $DIR/vendor/bin/carton install Image::Magick;;
-        * ) echo 'You will need to install it for FixMyStreet to work';;
+        [Yy]* ) $DIR/bin/cpanm -l local Image::Magick;;
+        * ) echo 'You will need to install it for FixMyStreet image handling to work';;
     esac
 fi

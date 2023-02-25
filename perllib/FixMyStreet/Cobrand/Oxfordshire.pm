@@ -4,12 +4,12 @@ use base 'FixMyStreet::Cobrand::UKCouncils';
 use strict;
 use warnings;
 use Moo;
-with 'FixMyStreet::Roles::Open311Multi';
 
 use LWP::Simple;
 use URI;
 use Try::Tiny;
 use JSON::MaybeXS;
+use Path::Tiny;
 
 sub council_area_id { return 2237; }
 sub council_area { return 'Oxfordshire'; }
@@ -37,11 +37,6 @@ sub report_validation {
     }
 
     return $errors;
-}
-
-sub is_council_with_case_management {
-    # XXX Change this to return 1 when OCC FMSfC goes live.
-    return FixMyStreet->config('STAGING_SITE');
 }
 
 sub enter_postcode_text {
@@ -109,7 +104,7 @@ sub path_to_pin_icons {
 
 sub pin_hover_title {
     my ($self, $problem, $title) = @_;
-    my $state = FixMyStreet::DB->resultset("State")->display($problem->state, 1);
+    my $state = FixMyStreet::DB->resultset("State")->display($problem->state, 1, 'oxfordshire');
     return "$state: $title";
 }
 
@@ -120,16 +115,6 @@ sub state_groups_inspect {
         [ 'Fixed', [ 'fixed - council' ] ],
         [ 'Closed', [ 'not responsible', 'duplicate', 'unable to fix' ] ],
     ]
-}
-
-sub updates_disallowed {
-    my $self = shift;
-    my ($problem) = @_;
-
-    # Not on reports made by the body user
-    return 1 if $self->body->comment_user_id && $problem->user_id == $self->body->comment_user_id;
-
-    return $self->next::method(@_);
 }
 
 sub open311_config {
@@ -143,7 +128,14 @@ sub open311_extra_data_include {
     my ($self, $row, $h, $contact) = @_;
 
     if ($contact->email =~ /^Alloy/) {
-        return [
+        # Add contributing user's role to extra data
+        my $contributed_by = $row->get_extra_metadata('contributed_by');
+        my $contributing_user = FixMyStreet::DB->resultset('User')->find({ id => $contributed_by });
+        my $roles;
+        if ($contributing_user) {
+            $roles = join(',', map { $_->name } $contributing_user->roles->all);
+        }
+        my $extra = [
             { name => 'report_url',
             value => $h->{url} },
             { name => 'title',
@@ -153,6 +145,8 @@ sub open311_extra_data_include {
             { name => 'category',
             value => $row->category },
         ];
+        push @$extra, { name => 'staff_role', value => $roles } if $roles;
+        return $extra;
     } else { # WDM
         return [
             { name => 'external_id', value => $row->id },
@@ -187,6 +181,11 @@ sub open311_post_send {
 
 sub open311_munge_update_params {
     my ($self, $params, $comment, $body) = @_;
+
+    my @contacts = $comment->problem->contacts;
+    foreach my $contact (@contacts) {
+        $params->{service_code} = $contact->email if $contact->sent_by_open311;
+    }
 
     if ($comment->get_extra_metadata('defect_raised')) {
         my $p = $comment->problem;
@@ -239,7 +238,6 @@ sub open311_filter_contacts_for_deletion {
     });
 }
 
-
 sub should_skip_sending_update {
     my ($self, $update ) = @_;
 
@@ -277,6 +275,25 @@ sub report_inspect_update_extra {
 }
 
 sub on_map_default_status { return 'open'; }
+
+sub around_nearby_filter {
+    my ($self, $params) = @_;
+    # If the category is a streetlighting one, search all
+    my $cat = $params->{categories}[0];
+    if ($cat) {
+        $cat = $self->body->contacts->not_deleted->search({ category => $cat })->first;
+        if ($cat && $cat->groups->[0] eq 'Street Lighting') {
+            my @contacts = $self->body->contacts->not_deleted->all;
+            @contacts =
+                map { $_->category }
+                grep { $_->groups->[0] eq 'Street Lighting' }
+                @contacts;
+            $params->{categories} = \@contacts;
+            $params->{distance} = 0.1; # Reduce the distance as searching more things
+        }
+    }
+
+}
 
 sub admin_user_domain { 'oxfordshire.gov.uk' }
 
@@ -342,6 +359,8 @@ sub dashboard_export_problems_add_columns {
 
 sub defect_wfs_query {
     my ($self, $bbox) = @_;
+
+    return if FixMyStreet->test_mode eq 'cypress';
 
     my $filter = "
     <ogc:Filter xmlns:ogc=\"http://www.opengis.net/ogc\">
@@ -467,6 +486,33 @@ sub extra_reports_pins {
     @box = (@box, 'EPSG:4326');
 
     return $self->pins_from_wfs(\@box);
+}
+
+sub report_sent_confirmation_email { 'id' }
+
+sub add_parish_wards {
+    my ($self, $areas) = @_;
+
+    my $extra_areas = decode_json(path(FixMyStreet->path_to('data/oxfordshire_cover.json'))->slurp_utf8);
+
+    %$areas = (
+        %$areas,
+        %$extra_areas
+    );
+}
+
+sub get_ward_type {
+    my ($self, $ward_type) = @_;
+
+    if ($ward_type eq 'CPC') {
+        return 'parish';
+    } elsif ($ward_type eq 'DIW') {
+        return 'ward';
+    } elsif ($ward_type eq 'DIS') {
+        return 'district';
+    } else {
+        return 'division'
+    }
 }
 
 1;

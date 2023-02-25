@@ -2,6 +2,7 @@ package FixMyStreet::Queue::Item::Report;
 
 use Moo;
 use DateTime::Format::Pg;
+use Time::HiRes;
 
 use Utils::OpenStreetMap;
 
@@ -11,6 +12,8 @@ use FixMyStreet::DB;
 use FixMyStreet::Email;
 use FixMyStreet::Map;
 use FixMyStreet::SendReport;
+
+use constant EMAIL_SENDER_PREFIX => 'FixMyStreet::SendReport::Email';
 
 # The row from the database being processed
 has report => ( is => 'ro' );
@@ -69,8 +72,8 @@ sub process {
     return unless $self->_check_abuse;
     $self->_create_vars;
     $self->_create_reporters or return;
-    my $result = $self->_send;
-    $self->_post_send($result);
+    $self->_send;
+    $self->_post_send;
 }
 
 sub _check_abuse {
@@ -97,6 +100,7 @@ sub _create_vars {
     my %h = map { $_ => $row->$_ } qw/id title detail name category latitude longitude used_map/;
     $h{report} = $row;
     $h{cobrand} = $self->cobrand;
+    $h{cobrand_handler} = $self->cobrand_handler;
     map { $h{$_} = $row->user->$_ || '' } qw/email phone/;
     $h{confirmed} = DateTime::Format::Pg->format_datetime( $row->confirmed->truncate (to => 'second' ) )
         if $row->confirmed;
@@ -164,32 +168,53 @@ sub _create_reporters {
     my $self = shift;
 
     my $row = $self->report;
+    my @failed_body_ids = @{ $row->send_fail_body_ids };
     my $bodies = FixMyStreet::DB->resultset('Body')->search(
-        { id => $row->bodies_str_ids },
+        {   id => (
+                @failed_body_ids ? \@failed_body_ids : $row->bodies_str_ids
+            )
+        },
         { order_by => 'name' },
     );
 
     my @dear;
-    my %reporters = ();
+    my %email_reporters;
+    my @other_reporters;
     while (my $body = $bodies->next) {
+        # NOTE
+        # Non-email senders only have one body each (or put another way, we
+        # assign each body in this loop to its own, unshared sender object).
+        #
+        # An email sender may have multiple bodies. This is so we can
+        # combine bodies into a single 'To' line and send one email for all.
         my $sender_info = $self->cobrand_handler->get_body_sender( $body, $row );
-        my $sender = "FixMyStreet::SendReport::" . $sender_info->{method};
+        my $sender_name = "FixMyStreet::SendReport::" . $sender_info->{method};
 
-        if ( ! exists $self->senders->{ $sender } ) {
-            $self->log(sprintf "No such sender [ $sender ] for body %s ( %d )", $body->name, $body->id);
+        if ( ! exists $self->senders->{ $sender_name } ) {
+            $self->log(sprintf "No such sender [ $sender_name ] for body %s ( %d )", $body->name, $body->id);
             next;
         }
-        $reporters{ $sender } ||= $sender->new();
 
         $self->log("Adding recipient body " . $body->id . ":" . $body->name . ", " . $sender_info->{method});
         push @dear, $body->name;
-        $reporters{ $sender }->add_body( $body, $sender_info->{config} );
+
+        my $reporter = $email_reporters{$sender_name} || $sender_name->new;
+        $reporter->add_body( $body, $sender_info->{config} );
+
+        if ( $sender_name =~ /${\EMAIL_SENDER_PREFIX}/ ) {
+            $email_reporters{$sender_name} = $reporter;
+        } else {
+            push @other_reporters, $reporter;
+        }
     }
 
-    unless ( keys %reporters ) {
+    unless ( @other_reporters
+        || keys %email_reporters )
+    {
         die 'Report not going anywhere for ID ' . $row->id . '!';
     }
 
+    # For email senders
     my $h = $self->h;
     $h->{bodies_name} = join(_(' and '), @dear);
     if ($h->{category} eq _('Other')) {
@@ -202,27 +227,42 @@ sub _create_reporters {
 
     if (FixMyStreet->staging_flag('send_reports', 0)) {
         # on a staging server send emails to ourselves rather than the bodies
-        %reporters = map { $_ => $reporters{$_} } grep { /FixMyStreet::SendReport::Email/ } keys %reporters;
-        unless (%reporters) {
-            %reporters = ( 'FixMyStreet::SendReport::Email' => FixMyStreet::SendReport::Email->new() );
+        unless (%email_reporters) {
+            %email_reporters
+                = ( EMAIL_SENDER_PREFIX => ${ \EMAIL_SENDER_PREFIX }->new() );
         }
+
+        @other_reporters = ();
     }
 
-    $self->_set_reporters(\%reporters);
+    $self->_set_reporters([@other_reporters, values %email_reporters]);
 }
 
 sub _send {
     my $self = shift;
 
-    # Multiply results together, so one success counts as a success.
-    my $result = -1;
+    my $report = $self->report;
 
-    for my $sender ( keys %{$self->reporters} ) {
-        $self->log("Sending using " . $sender);
-        $sender = $self->reporters->{$sender};
-        my $res = $sender->send( $self->report, $self->h );
-        $result *= $res;
-        $self->report->add_send_method($sender) if !$res;
+    my @add_send_fail_body_ids;
+    my @remove_send_fail_body_ids;
+
+    for my $sender ( @{ $self->reporters } ) {
+        my $sender_name = ref $sender;
+        $self->log( 'Sending using ' . $sender_name );
+
+        # NOTE
+        # Non-email senders should only have one body each (see
+        # _create_reporters()).
+        $sender->send( $self->report, $self->h );
+
+        my @body_ids = map { $_->id } @{ $sender->bodies };
+        if ($sender->success) {
+            $report->add_send_method($sender_name);
+            push @remove_send_fail_body_ids, @body_ids;
+        } else {
+            push @add_send_fail_body_ids, @body_ids;
+        }
+
         if ( $self->manager ) {
             if ($sender->unconfirmed_data) {
                 foreach my $e (keys %{ $sender->unconfirmed_data } ) {
@@ -235,17 +275,24 @@ sub _send {
         }
     }
 
-    return $result;
+    $self->report->add_send_fail_body_ids(@add_send_fail_body_ids)
+        if @add_send_fail_body_ids;
+
+    $self->report->remove_send_fail_body_ids(@remove_send_fail_body_ids)
+        if @remove_send_fail_body_ids;
 }
 
 sub _post_send {
-    my ($self, $result) = @_;
+    my ($self) = @_;
 
     # Record any errors, whether overall successful or not (if multiple senders, perhaps one failed)
     my @errors;
-    for my $sender ( keys %{$self->reporters} ) {
-        unless ( $self->reporters->{ $sender }->success ) {
-            push @errors, $self->reporters->{ $sender }->error;
+    my $result = 1;
+    for my $sender ( @{ $self->reporters } ) {
+        if ($sender->success) {
+            $result = 0;
+        } else {
+            push @errors, $sender->error;
         }
     }
     if (@errors) {
@@ -262,10 +309,43 @@ sub _post_send {
             $self->h->{sent_confirm_id_ref} = $self->report->$send_confirmation_email;
             $self->_send_report_sent_email;
         }
+        $self->_add_confirmed_update;
         $self->cobrand_handler->post_report_sent($self->report);
         $self->log("Send successful");
     } else {
         $self->log("Send failed");
+    }
+}
+
+sub _add_confirmed_update {
+    my $self = shift;
+
+    # If there is a special template, create a comment using that
+    my $problem = $self->report;
+    my $existing = $problem->comments->search({ external_id => 'auto-internal' })->first;
+    return if $existing;
+    foreach my $body (values %{$problem->bodies}) {
+        my $user = $body->comment_user or next;
+
+        my $updates = Open311::GetServiceRequestUpdates->new(
+            system_user => $user,
+            current_body => $body,
+            blank_updates_permitted => 1,
+        );
+
+        my $template = $problem->response_template_for('confirmed', 'dummy', '', '');
+        my ($description, $email_text) = $updates->comment_text_for_request($template, {}, $problem);
+        next unless $description;
+
+        my $request = {
+            service_request_id => $problem->id,
+            update_id => 'auto-internal',
+            comment_time => DateTime->from_epoch( epoch => Time::HiRes::time ),
+            email_text => $email_text,
+            status => 'open',
+            description => $description,
+        };
+        $updates->process_update($request, $problem);
     }
 }
 

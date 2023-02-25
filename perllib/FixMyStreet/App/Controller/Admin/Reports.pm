@@ -231,6 +231,7 @@ sub edit : Path('/admin/report_edit') : Args(1) {
                 my $uri = $c->uri_for_action('admin/users/index', { search => $u->email } );
                 push @fields, {
                     name => _('Created By'),
+                    code => 'contributed_by',
                     val => FixMyStreet::Template::SafeString->new( "<a href=\"$uri\">@{[$u->name]} (@{[$u->email]})</a>" )
                 };
                 if ( $u->from_body ) {
@@ -239,7 +240,7 @@ sub edit : Path('/admin/report_edit') : Args(1) {
                     push @fields, { name => _('Created Body'), val => _('Superuser') };
                 }
             } else {
-                push @fields, { name => 'contributed_by', val => $extra->{contributed_by} };
+                push @fields, { name => 'contributed_by', code => 'contributed_by', val => $extra->{contributed_by} };
             }
             delete $extra->{contributed_by};
         }
@@ -285,7 +286,8 @@ sub edit : Path('/admin/report_edit') : Args(1) {
     }
     elsif ( $c->get_param('mark_sent') ) {
         $c->forward('/auth/check_csrf_token');
-        $problem->update({ whensent => \'current_timestamp' })->discard_changes;
+        $problem->mark_as_sent;
+        $problem->update->discard_changes;
         $c->stash->{status_message} = _('That problem has been marked as sent.');
         $c->forward( '/admin/log_edit', [ $id, 'problem', 'marked sent' ] );
     }
@@ -295,9 +297,12 @@ sub edit : Path('/admin/report_edit') : Args(1) {
         my $old_state = $problem->state;
 
         my %columns = (
-            flagged => $c->get_param('flagged') ? 1 : 0,
             non_public => $c->get_param('non_public') ? 1 : 0,
         );
+        # Only superusers can flag / unflag a report
+        if ($c->user->is_superuser) {
+            $columns{flagged} = $c->get_param('flagged') ? 1 : 0;
+        }
         foreach (qw/state anonymous title detail name external_id external_body external_team/) {
             $columns{$_} = $c->get_param($_);
         }
@@ -373,49 +378,78 @@ Returns 1 if category changed, 0 if no change.
 =cut
 
 sub edit_category : Private {
-    my ($self, $c, $problem, $no_comment) = @_;
+    my ($self, $c, $problem, $no_comment, $contact) = @_;
 
-    if ((my $category = $c->get_param('category')) ne $problem->category) {
-        my $force_resend = $c->cobrand->call_hook('category_change_force_resend', $problem->category, $category);
-        my $disable_resend = $c->cobrand->call_hook('disable_resend');
-        my $category_old = $problem->category;
-        $problem->category($category);
-        my @contacts = grep { $_->category eq $problem->category } @{$c->stash->{contacts}};
-        my @new_body_ids = map { $_->body_id } @contacts;
-        # If the report has changed bodies (and not to a subset!) we need to resend it
-        my %old_map = map { $_ => 1 } @{$problem->bodies_str_ids};
-        if (!$disable_resend && grep !$old_map{$_}, @new_body_ids) {
-            $problem->resend;
-        }
-        # If the send methods of the old/new contacts differ we need to resend the report
-        my @new_send_methods = uniq map {
-            ( $_->body->can_be_devolved && $_->send_method ) ?
-            $_->send_method : $_->body->send_method
-                ? $_->body->send_method
-                : $c->cobrand->_fallback_body_sender()->{method};
-        } @contacts;
-        my %old_send_methods = map { $_ => 1 } split /,/, ($problem->send_method_used || "Email");
-        if (!$disable_resend && grep !$old_send_methods{$_}, @new_send_methods) {
-            $problem->resend;
-        }
-        if ($force_resend) {
-            $problem->resend;
-        }
-
-        $problem->bodies_str(join( ',', @new_body_ids ));
-        my $update_text = '*' . sprintf(_('Category changed from ‘%s’ to ‘%s’'), $category_old, $category) . '*';
-        if ($no_comment) {
-            $c->stash->{update_text} = $update_text;
-        } else {
-            $problem->add_to_comments({
-                text => $update_text,
-                user => $c->user->obj,
-            });
-        }
-        $c->forward( '/admin/log_edit', [ $problem->id, 'problem', 'category_change' ] );
-        return 1;
+    my $category;
+    if ($contact) {
+        $category = $contact->category;
+        return 0 if $contact->id == $problem->contact->id;
+    } else {
+        $category = $c->get_param('category');
+        return 0 if $category eq $problem->category;
     }
-    return 0;
+
+    my $category_old = $problem->category;
+    $problem->category($category);
+
+    my @contacts;
+    if ($contact) {
+        @contacts = ($contact);
+    } else {
+        @contacts = grep { $_->category eq $problem->category } @{$c->stash->{contacts}};
+    }
+
+    check_resend($c, $category_old, $problem, \@contacts);
+
+    my @new_body_ids = map { $_->body_id } @contacts;
+    $problem->bodies_str(join( ',', @new_body_ids ));
+
+    my $update_text = '*' . sprintf(_('Category changed from ‘%s’ to ‘%s’'), $category_old, $category) . '*';
+    if ($no_comment) {
+        $c->stash->{update_text} = $update_text;
+    } else {
+        $problem->add_to_comments({
+            text => $update_text,
+            user => $c->user->obj,
+        });
+    }
+
+    $c->forward( '/admin/log_edit', [ $problem->id, 'problem', 'category_change' ] );
+    return 1;
+}
+
+sub check_resend {
+    my ($c, $category_old, $problem, $contacts) = @_;
+
+    my $force_resend = $c->cobrand->call_hook('category_change_force_resend', $category_old, $problem->category);
+    if ($force_resend) {
+        $problem->resend;
+        return;
+    }
+
+    my $disable_resend = $c->cobrand->call_hook('disable_resend');
+    return if $disable_resend;
+
+    # If the report has changed bodies (and not to a subset!) we need to resend it
+    my %old_map = map { $_ => 1 } @{$problem->bodies_str_ids};
+    my @new_body_ids = map { $_->body_id } @$contacts;
+    if (grep !$old_map{$_}, @new_body_ids) {
+        $problem->resend;
+        return;
+    }
+
+    # If the send methods of the old/new contacts differ we need to resend the report
+    my @new_send_methods = uniq map {
+        ( $_->body->can_be_devolved && $_->send_method ) ?
+        $_->send_method : $_->body->send_method
+            ? $_->body->send_method
+            : $c->cobrand->_fallback_body_sender()->{method};
+    } @$contacts;
+    my %old_send_methods = map { $_ => 1 } split /,/, ($problem->send_method_used || "Email");
+    if (grep !$old_send_methods{$_}, @new_send_methods) {
+        $problem->resend;
+        return;
+    }
 }
 
 =head2 edit_location

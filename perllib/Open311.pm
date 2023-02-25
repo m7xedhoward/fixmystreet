@@ -104,7 +104,7 @@ sub send_service_request {
             } elsif ( my $token = $obj->{request}->[0]->{token} ) {
 
                 my $service_request_id;
-                my $polling_interval = FixMyStreet->config('O311_POLLING_INTERVAL') || 2;
+                my $polling_interval = FixMyStreet->config('O311_POLLING_INTERVAL') // 2;
                 my $polling_max_tries = FixMyStreet->config('O311_POLLING_MAX_TRIES') || 5;
 
                 for (1..$polling_max_tries) {
@@ -461,7 +461,7 @@ sub _populate_service_request_update_params {
     }
 
     # The following will only set by UK in Bromley/Bromley cobrands
-    if ( $comment->extra && $comment->extra->{title} ) {
+    if ( $comment->extra && $comment->extra->{title} && ( $comment->problem->cobrand_data || '' ) ne 'waste' ) {
         $params->{'email_alerts_requested'}
             = $comment->extra->{email_alerts_requested} ? 'TRUE' : 'FALSE';
         $params->{'title'} = $comment->extra->{title};

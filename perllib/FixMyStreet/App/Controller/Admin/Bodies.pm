@@ -5,9 +5,11 @@ use namespace::autoclean;
 BEGIN { extends 'Catalyst::Controller'; }
 
 use POSIX qw(strcoll);
+use List::MoreUtils qw(uniq);
 use mySociety::EmailUtil qw(is_valid_email_list);
 use FixMyStreet::MapIt;
 use FixMyStreet::SendReport;
+use FixMyStreet::Cobrand;
 
 =head1 NAME
 
@@ -185,6 +187,9 @@ sub body_form_dropdowns : Private {
 
     my @methods = map { $_ =~ s/FixMyStreet::SendReport:://; $_ } sort keys %{ FixMyStreet::SendReport->get_senders };
     $c->stash->{send_methods} = \@methods;
+
+    my @cobrands = uniq sort map { $_->{moniker} } FixMyStreet::Cobrand->available_cobrand_classes;
+    $c->stash->{cobrands} = \@cobrands;
 }
 
 sub check_for_super_user : Private {
@@ -276,11 +281,19 @@ sub update_contact : Private {
     $contact->send_method( $c->get_param('send_method') );
 
     # Set flags in extra to the appropriate values
-    foreach (qw(photo_required open311_protect updates_disallowed reopening_disallowed assigned_users_only anonymous_allowed)) {
+    foreach (qw(photo_required open311_protect updates_disallowed reopening_disallowed assigned_users_only anonymous_allowed prefer_if_multiple)) {
         if ( $c->get_param($_) ) {
             $contact->set_extra_metadata( $_ => 1 );
         } else {
             $contact->unset_extra_metadata($_);
+        }
+    }
+
+    if (my $type = $c->get_param('type')) {
+        if ($type eq 'standard') {
+            $contact->unset_extra_metadata('type');
+        } else {
+            $contact->set_extra_metadata(type => $type);
         }
     }
 
@@ -315,6 +328,13 @@ sub update_contact : Private {
 
     $c->forward('/admin/update_extra_fields', [ $contact ]);
     $c->forward('contact_cobrand_extra_fields', [ $contact, \%errors ]);
+
+    for ( @{ $contact->extra->{_fields} } ) {
+        if ( $_->{code} =~ /\s/ ) {
+            $errors{code} = _('Codes for extra data must not contain spaces');
+            last;
+        }
+    }
 
     # Special form disabling form
     if ($c->get_param('disable')) {
@@ -389,6 +409,7 @@ sub update_body : Private {
 
     $c->forward('check_for_super_user');
     $c->forward('/auth/check_csrf_token');
+    $c->forward('body_form_dropdowns');
 
     my $values = $c->forward('body_params');
     return if %{$c->stash->{body_errors}};
@@ -406,7 +427,11 @@ sub update_body : Private {
             for keys %{$values->{extras}};
         $body->update;
     }
+
+    my %possible = map { $_->{id} => 1 } @{$c->stash->{areas}};
     my @current = $body->body_areas->all;
+    # Don't want to remove any that weren't present in the list
+    @current = grep { $possible{$_->area_id} } @current;
     my %current = map { $_->area_id => 1 } @current;
     my @area_ids = $c->get_param_list('area_ids');
     foreach (@area_ids) {
@@ -443,12 +468,13 @@ sub body_params : Private {
     my %params = map { $_ => $c->get_param($_) || $defaults{$_} } keys %defaults;
     $c->forward('check_body_params', [ \%params ]);
 
-    my @extras = qw/fetch_all_problems/;
+    my @extras = qw/fetch_all_problems cobrand/;
     my $cobrand_extras = $c->cobrand->call_hook('body_extra_fields');
     push @extras, @$cobrand_extras if $cobrand_extras;
 
     %defaults = map { $_ => '' } @extras;
     my %extras = map { $_ => $c->get_param("extra[$_]") || $defaults{$_} } @extras;
+    $c->forward('check_body_extras', [ \%extras ]);
     return { params => \%params, extras => \%extras };
 }
 
@@ -459,6 +485,20 @@ sub check_body_params : Private {
 
     unless ($params->{name}) {
         $c->stash->{body_errors}->{name} = _('Please enter a name for this body');
+    }
+}
+
+sub check_body_extras : Private {
+    my ( $self, $c, $extras ) = @_;
+
+    $c->stash->{body_errors} ||= {};
+
+    return unless $extras->{cobrand};
+    if (my $b = $c->model('DB::Body')->find({
+        id => { '!=', $c->stash->{body_id} },
+        extra => { like => '%T7:cobrand,T' . length($extras->{cobrand}) . ':' . $extras->{cobrand} . '%'},
+    })) {
+        $c->stash->{body_errors}->{cobrand} = _('This cobrand is already assigned to another body: ' . $b->name);
     }
 }
 

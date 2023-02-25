@@ -11,7 +11,7 @@ my $user5 = $mech->create_user_ok('test5@example.com', name => 'Test User 5');
 
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 
-my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council');
+my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council', {}, { cobrand => 'oxfordshire' });
 my $haringey = $mech->create_body_ok(2509, 'Haringey Borough Council');
 my $southend = $mech->create_body_ok(2607, 'Southend-on-Sea Borough Council');
 
@@ -308,6 +308,138 @@ for my $test (
             $mech->content_contains('Updated');
         }
     };
+}
+
+{
+    note 'Staff user for a council:';
+
+    my $config = {
+        ALLOWED_COBRANDS => [ 'oxfordshire' ],
+        MAPIT_URL => 'http://mapit.uk/',
+    };
+
+    my $oxfordshireuser = $mech->create_user_ok(
+        'counciluser@example.com',
+        name => 'Council User',
+        from_body => $oxfordshire,
+    );
+    $mech->log_in_ok( $oxfordshireuser->email );
+
+    $oxfordshireuser->user_body_permissions->create({
+        body => $oxfordshire,
+        permission_type => 'user_edit',
+    });
+
+    subtest 'add user - body not explicitly provided' => sub {
+        FixMyStreet::override_config $config, sub {
+            $mech->get_ok('/admin/users');
+            $mech->submit_form_ok( { with_fields => {
+                name => 'No Body',
+                email => 'nobody@email.com',
+                email_verified => 1,
+            } } );
+
+            $mech->base_like(qr{/admin/users/\d+},
+                'should redirect to /admin/users/<id>');
+
+            # Check if user appears in list
+            $mech->get_ok('/admin/users');
+            $mech->content_contains(
+                'No Body',
+                'user should appear in /admin/users list',
+            );
+        };
+    };
+
+    my $test_body_user = $mech->create_user_ok(
+        'bod@gmail.com',
+        name => 'Bod Acious',
+    );
+
+    subtest 'add existing user who does not have a body' => sub {
+        FixMyStreet::override_config $config, sub {
+            is $test_body_user->from_body, undef,
+                'check user does not have body initially';
+
+            $mech->get_ok('/admin/users');
+            $mech->content_lacks(
+                $test_body_user->email,
+                'check user is not in /admin/users list initially',
+            );
+
+            $mech->submit_form_ok( { with_fields => {
+                name => $test_body_user->name,
+                email => $test_body_user->email,
+                email_verified => 1,
+            } }, "should submit 'add user' form" );
+
+            $mech->base_like(qr{/admin/users/\d+},
+                'should redirect to /admin/users/<id>');
+
+            # Check if user appears in list
+            $mech->get_ok('/admin/users');
+            $mech->content_contains(
+                $test_body_user->email,
+                'user should appear in /admin/users list',
+            );
+
+            $test_body_user->discard_changes;
+            is $test_body_user->from_body->id, $oxfordshire->id,
+                'user should be assigned to a body';
+        };
+    };
+
+    subtest 'add existing user who has a body' => sub {
+        FixMyStreet::override_config $config, sub {
+            $mech->get_ok('/admin/users');
+            $mech->content_contains(
+                $test_body_user->email,
+                'check user is in /admin/users list initially',
+            );
+
+            $mech->submit_form_ok( { with_fields => {
+                name => $test_body_user->name,
+                email => $test_body_user->email,
+                email_verified => 1,
+            } }, "should submit 'add user' form" );
+
+            $mech->base_like(qr{/admin/users/add},
+                'should redirect to /admin/users/add');
+            $mech->content_contains('User already exists',
+                'should display existence error');
+        };
+    };
+
+    subtest 'remove staff status from user' => sub {
+        FixMyStreet::override_config $config, sub {
+            $oxfordshireuser->user_body_permissions->create(
+                {   body            => $oxfordshire,
+                    permission_type => 'user_assign_body',
+                }
+            );
+
+            $mech->get_ok( '/admin/users/' . $test_body_user->id );
+
+            $mech->submit_form_ok(
+                { with_fields => { body => undef } },
+                'should submit "edit user" form',
+            );
+            $mech->base_like( qr{/admin/users},
+                'should redirect to /admin/users' );
+
+            $mech->content_lacks( $test_body_user->email,
+                'user should no longer be in /admin/users list' );
+
+            # Refresh user object by fetching data from DB
+            $test_body_user = $mech->create_user_ok( $test_body_user->email );
+            is $test_body_user->from_body, undef,
+                'user should no longer have body';
+        };
+    };
+
+
+    # Revert changes
+    $mech->log_in_ok( $superuser->email );
 }
 
 my %default_perms = (
@@ -769,6 +901,40 @@ subtest "can edit list of user's alerts" => sub {
 
     is $user->alerts->count, 0, 'alert deleted';
 };
+
+subtest "can view pagination on list of user's alerts" => sub {
+    $mech->get_ok( '/admin/users/' . $user->id );
+    $mech->content_lacks("User's alerts", 'no list of alerts');
+
+    my @problems = $mech->create_problems_for_body(110, 2514, 'Title', { user => $user });
+
+    my $alert;
+    foreach my $p ( @problems ) {
+        $alert = FixMyStreet::DB->resultset('Alert')->create({
+            user_id => $user->id,
+            alert_type => 'new_updates',
+            parameter => $p->id
+        });
+    }
+    my $first_alert = $user->alerts->first;
+    my $last_alert = $alert;
+    $last_alert->update({ whensubscribed => DateTime->now->add(minutes => 5) });
+
+    $mech->get_ok( '/admin/users/' . $user->id );
+    $mech->content_contains("User's alerts", 'has list of alerts');
+    $mech->content_contains("1 to 100 of 110", 'has pagination bar');
+    $mech->content_like(qr[<td>${\$first_alert->id}</td>\s*<td>new_updates</td>]m, 'first alert on page');
+    $mech->content_unlike(qr[<td>${\$last_alert->id}</td>\s*<td>new_updates</td>]m, 'last alert not on page');
+
+    $mech->get_ok( '/admin/users/' . $user->id . '?p=2' );
+    $mech->content_contains("User's alerts", 'has list of alerts');
+    $mech->content_contains("101 to 110 of 110", 'has pagination bar');
+    $mech->content_unlike(qr[<td>${\$first_alert->id}</td>\s*<td>new_updates</td>]m, 'first alert not on page');
+    $mech->content_like(qr[<td>${\$last_alert->id}</td>\s*<td>new_updates</td>]m, 'last alert on page');
+
+    $user->alerts->delete_all;
+};
+
 
 subtest "View timeline" => sub {
     $mech->get_ok('/admin/timeline');

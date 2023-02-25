@@ -29,6 +29,8 @@ requires 'Net::Server', '2.009';
   requires 'MooseX::Role::Parameterised', '1.10';
   requires 'CatalystX::Component::Traits', '0.19';
   requires 'MooseX::Traits::Pluggable', '0.12';
+# For OpenSSL 3 support
+  requires 'Crypt::OpenSSL::RSA', '0.33';
 
 # Catalyst itself, and modules/plugins used
 requires 'Catalyst', '5.90124';
@@ -86,6 +88,7 @@ requires 'File::Path';
 requires 'Geo::OLC';
 requires 'Geography::NationalGrid',
     mirror => 'https://cpan.metacpan.org/';
+requires 'Getopt::Long', '2.52';
 requires 'Getopt::Long::Descriptive', '0.105';
 requires 'HTML::Entities';
 requires 'HTML::FormHandler::Model::DBIC';
@@ -98,7 +101,8 @@ requires 'IO::String';
 requires 'JSON::MaybeXS';
 requires 'Locale::gettext';
 requires 'LWP::Simple';
-requires 'LWP::UserAgent';
+requires 'LWP::UserAgent', '6.61';
+requires 'HTTP::CookieJar', '0.012';
 requires 'Math::Trig';
 requires 'MIME::Parser'; # HandleMail
 requires 'Module::Pluggable';
@@ -107,7 +111,7 @@ requires 'Moo', '2.003004';
 requires 'MooX::Types::MooseLike';
 requires 'namespace::autoclean', '0.28';
 requires 'Net::Amazon::S3';
-requires 'Net::DNS::Resolver';
+requires 'Net::DNS', '1.33';
 requires 'Net::Domain::TLD', '1.75';
 requires 'Net::Facebook::Oauth2', '0.11';
 requires 'Net::OAuth';
@@ -183,9 +187,11 @@ requires 'Sort::Key';
 requires 'Sub::Override';
 requires 'Test::Exception';
 requires 'Test::LongString';
+requires 'Test::MockModule', '0.177.0';
 requires 'Test::MockTime';
 requires 'Test::More', '0.88';
 requires 'Test::Output';
+requires 'Test::Trap';
 requires 'Test::Warn';
 requires 'Test::WWW::Mechanize::Catalyst', '0.62';
 requires 'Web::Scraper';

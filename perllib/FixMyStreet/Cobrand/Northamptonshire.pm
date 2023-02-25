@@ -8,7 +8,7 @@ use Moo;
 with 'FixMyStreet::Roles::ConfirmValidation';
 with 'FixMyStreet::Roles::Open311Alloy';
 
-sub council_area_id { 2234 }
+sub council_area_id { [ 164185, 164186 ] }
 sub council_area { 'Northamptonshire' }
 sub council_name { 'Northamptonshire Highways' }
 sub council_url { 'northamptonshire' }
@@ -39,18 +39,6 @@ sub report_sent_confirmation_email { 'id' }
 
 sub admin_user_domain { 'northamptonshire.gov.uk' }
 
-sub updates_disallowed {
-    my $self = shift;
-    my ($problem) = @_;
-
-    # Only open reports
-    return 1 if $problem->is_fixed || $problem->is_closed;
-    # Not on reports made by the body user
-    return 1 if $problem->user_id == $self->body->comment_user_id;
-
-    return $self->next::method(@_);
-}
-
 sub is_defect {
     my ($self, $p) = @_;
     return $p->user_id == $self->body->comment_user_id;
@@ -77,8 +65,6 @@ sub is_two_tier { 1 }
 
 sub get_geocoder { 'OSM' }
 
-sub map_type { 'Northamptonshire' }
-
 sub open311_extra_data_exclude { [ 'emergency' ] }
 
 sub open311_get_update_munging {
@@ -101,6 +87,9 @@ sub should_skip_sending_update {
         return 1;
     }
 
+    my $move = DateTime->new(year => 2022, month => 9, day => 12, hour => 9, minute => 30, time_zone => FixMyStreet->local_time_zone);
+    return 1 if $p->whensent < $move;
+
     return 0;
 }
 
@@ -119,6 +108,22 @@ sub staff_ignore_form_disable_form {
 
     return $c->user_exists
         && $c->user->belongs_to_body( $self->body->id );
+}
+
+sub dashboard_export_problems_add_columns {
+    my ($self, $csv) = @_;
+
+    $csv->add_csv_columns(
+        external_id => 'External ID',
+    );
+
+    $csv->csv_extra_data(sub {
+        my $report = shift;
+
+        return {
+            external_id => $report->external_id,
+        };
+    });
 }
 
 1;

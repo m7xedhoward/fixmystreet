@@ -166,7 +166,7 @@ has_field report_id => (
         my $self = shift;
         my $c = $self->form->c;
         return if $self->has_errors; # Called even if already failed
-        unless ($self->value =~ /^[0-9]+$/) {
+        unless ($self->value =~ /^[0-9]{8}$/) {
             $self->add_error('Please provide a valid report ID');
         }
     },
@@ -207,6 +207,7 @@ has_field location => (
 has_page 'choose_location' => (
     fields => ['location_matches', 'continue'],
     title => 'The location of the incident',
+    tags => { hide => 1 },
     next => 'map',
     update_field_list => sub {
         my $form = shift;
@@ -583,7 +584,7 @@ has_field photos => (
 );
 
 has_page about_vehicle => (
-    fields => ['make', 'registration', 'mileage', 'v5', 'v5_in_name', 'insurer_address', 'damage_claim', 'vat_reg', 'continue'],
+    fields => ['registration', 'mileage', 'v5', 'v5_in_name', 'insurer_address', 'damage_claim', 'vat_reg', 'continue'],
     title => 'About the vehicle',
     tags => {
         hide => sub { $_[0]->form->value_nequals('what', 'vehicle'); }
@@ -601,12 +602,6 @@ has_page about_vehicle => (
 
         $form->process_upload('v5');
     },
-);
-
-has_field make => (
-    required => 1,
-    type => 'Text',
-    label => 'Make and model',
 );
 
 has_field registration => (
@@ -737,8 +732,8 @@ has_field tyre_damage => (
 );
 
 has_field tyre_mileage => (
-    type => 'Text',
-    label => 'Age and Mileage of the tyre(s) at the time of the incident',
+    type => 'Integer',
+    label => 'Mileage of the tyre(s) at the time of the incident',
     tags => {
         hide => sub { $_[0]->form->value_equals('tyre_damage', 'No') }
     },
@@ -1077,19 +1072,11 @@ sub value_nequals {
         $form->saved_data->{$field} ne $answer;
 }
 
-sub label_for_field {
-    my ($form, $field, $key) = @_;
-    return "" unless $key;
-    foreach ($form->field($field)->options) {
-        return $_->{label} if $_->{value} eq $key;
-    }
-}
-
 sub format_for_display {
     my ($form, $field_name, $value) = @_;
     my $field = $form->field($field_name);
     if ( $field->{type} eq 'Select' ) {
-        return $form->label_for_field($field_name, $value);
+        return $form->c->stash->{label_for_field}($form, $field_name, $value);
     } elsif ( $field->{type} eq 'DateTime' ) {
         # if field was on the last screen then we get the DateTime and not
         # the hash because it's not been through the freeze/that process
@@ -1150,28 +1137,6 @@ sub validate_datetime {
     }
 
     $field->add_error("Please enter a valid date") unless $valid;
-}
-
-sub update_photo {
-    my ($form, $field, $fields) = @_;
-    my $saved_data = $form->saved_data;
-
-    if ($saved_data->{$field}) {
-        my $fileid = $field . '_fileid';
-        $saved_data->{$fileid} = $saved_data->{$field};
-        $fields->{$fileid} = { default => $saved_data->{$field} };
-    }
-}
-
-sub process_photo {
-    my ($form, $field) = @_;
-
-    my $saved_data = $form->saved_data;
-    my $fileid = $field . '_fileid';
-    my $c = $form->{c};
-    $c->forward('/photo/process_photo');
-    $saved_data->{$field} = $c->stash->{$fileid};
-    $saved_data->{$fileid} = '';
 }
 
 sub file_upload {

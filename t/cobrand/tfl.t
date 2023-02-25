@@ -14,7 +14,7 @@ my $tilma = t::Mock::Tilma->new;
 LWP::Protocol::PSGI->register($tilma->to_psgi_app, host => 'tilma.mysociety.org');
 
 
-my $body = $mech->create_body_ok(2482, 'TfL');
+my $body = $mech->create_body_ok(2482, 'TfL', {}, { cobrand => 'tfl' });
 FixMyStreet::DB->resultset('BodyArea')->find_or_create({
     area_id => 2483, # Hounslow
     body_id => $body->id,
@@ -43,7 +43,7 @@ $staffuser->user_body_permissions->create({
 });
 my $user = $mech->create_user_ok('londonresident@example.com');
 
-my $bromley = $mech->create_body_ok(2482, 'Bromley');
+my $bromley = $mech->create_body_ok(2482, 'Bromley', {}, { cobrand => 'bromley' });
 my $bromleyuser = $mech->create_user_ok('bromleyuser@bromley.example.com', name => 'Bromley Staff', from_body => $bromley);
 $mech->create_contact_ok(
     body_id => $bromley->id,
@@ -65,7 +65,7 @@ $mech->create_contact_ok(
     group => ['Street cleaning'],
 );
 
-my $hackney = $mech->create_body_ok(2508, 'Hackney Council');
+my $hackney = $mech->create_body_ok(2508, 'Hackney Council', {}, { cobrand => 'hackney' });
 $mech->create_contact_ok(
     body_id => $hackney->id,
     category => 'Abandoned Vehicle',
@@ -199,8 +199,8 @@ my $contact6 = $mech->create_contact_ok(
 );
 $mech->create_contact_ok(
     body_id => $body->id,
-    category => 'Countdown - not working',
-    email => 'countdown@example.net',
+    category => 'Abandoned Santander Cycle',
+    email => 'lonelybikes@example.net',
 );
 
 FixMyStreet::override_config {
@@ -228,7 +228,7 @@ FixMyStreet::override_config {
             tfl => 'anonymous'
         },
         contact_name => {
-            tfl => 'TfL Street Care',
+            tfl => 'TfL Streetcare',
         },
         do_not_reply_email => {
             tfl => 'fms-tfl-DO-NOT-REPLY@example.com',
@@ -412,14 +412,17 @@ subtest "extra information included in email" => sub {
     $mech->clear_emails_ok;
     FixMyStreet::Script::Reports::send();
     my @email = $mech->get_email;
-    like $email[0]->header('From'), qr/"Joe Bloggs" <fms-report-$id-/;
+    is $email[0]->header('From'), '"TfL Streetcare" <fms-tfl-DO-NOT-REPLY@example.com>';
     is $email[0]->header('To'), 'TfL <busstops@example.com>';
+    is $email[0]->header('Reply-To'), undef;
     like $mech->get_text_body_from_email($email[0]), qr/Report reference: FMS$id/, "FMS-prefixed ID in TfL email";
     like $mech->get_text_body_from_email($email[0]), qr/Stop number: 12345678/, "Bus stop code in TfL email";
+    unlike $mech->get_text_body_from_email($email[0]), qr/Joe Bloggs/;
     my $body = $mech->get_html_body_from_email($email[0]);
     unlike $body, qr/Please do not reply/;
+    unlike $body, qr/Joe Bloggs/;
     is $email[1]->header('To'), $report->user->email;
-    is $email[1]->header('From'), '"TfL Street Care" <fms-tfl-DO-NOT-REPLY@example.com>';
+    is $email[1]->header('From'), '"TfL Streetcare" <fms-tfl-DO-NOT-REPLY@example.com>';
     like $mech->get_text_body_from_email($email[1]), qr/report's reference number is FMS$id/, "FMS-prefixed ID in reporter email";
     $mech->clear_emails_ok;
 
@@ -427,14 +430,17 @@ subtest "extra information included in email" => sub {
     $mech->content_contains('FMS' . $report->id) or diag $mech->content;
 };
 
-subtest "Countdown reports sent from different email" => sub {
-    my $report = FixMyStreet::DB->resultset("Problem")->find({ title => 'Test Report 1'});
-    $report->update({ whensent => undef, category => "Countdown - not working" });
+subtest "Abandoned bike reports contain bike number" => sub {
+    my ($report) = $mech->create_problems_for_body(1, $body->id, 'Abandoned bike', { category => "Abandoned Santander Cycle", cobrand => 'tfl' });
+    $report->set_extra_fields({ name => 'Question', value => '123456' });
+    $report->update;
     FixMyStreet::Script::Reports::send();
     my @email = $mech->get_email;
-    is $email[0]->header('From'), '"TfL Street Care" <fms-tfl-DO-NOT-REPLY@example.com>';
+    like $mech->get_text_body_from_email($email[0]), qr/Bike number: 123456/, "Bike number in TfL email";
+    my $body = $mech->get_html_body_from_email($email[0]);
+    like $body, qr/Bike number:<\/strong> 123456/;
     $mech->clear_emails_ok;
-    $report->update({ category => "Bus stops" });
+    $report->delete;
 };
 
 subtest 'Dashboard CSV extra columns' => sub {
@@ -450,7 +456,7 @@ subtest 'Dashboard CSV extra columns' => sub {
     $mech->content_contains(',"Safety critical","Delivered to","Closure email at","Reassigned at","Reassigned by","Is the pole leaning?"');
     $mech->content_contains('"Bus things","Bus stops"');
     $mech->content_contains('"BR1 3UH",Bromley,');
-    $mech->content_contains(',,,no,countdown@example.net,,,,Yes');
+    $mech->content_contains(',,,no,busstops@example.com,,,,Yes');
 
     $report->set_extra_fields({ name => 'safety_critical', value => 'yes' });
     $report->anonymous(1);
@@ -475,7 +481,13 @@ subtest 'Dashboard CSV extra columns' => sub {
     $mech->content_contains(',"Safety critical","Delivered to","Closure email at","Reassigned at","Reassigned by"');
     $mech->content_contains('(anonymous ' . $report->id . ')');
     $mech->content_contains($dt . ',,,confirmed,51.4021');
-    $mech->content_contains(',,,yes,countdown@example.net,,' . $dt . ',"Council User"');
+    $mech->content_contains(',,,yes,busstops@example.com,,' . $dt . ',"Council User"');
+
+    $report->set_extra_fields({ name => 'Question', value => '12345' });
+    $report->update;
+
+    $mech->get_ok('/dashboard?export=1');
+    $mech->content_contains(',12345,,no,busstops@example.com,,', "Bike number added to csv");
 };
 
 subtest 'Inspect form state choices' => sub {
@@ -637,7 +649,8 @@ subtest 'check report age on /around' => sub {
 
     $mech->get_ok( '/around?lat=' . $report->latitude . '&lon=' . $report->longitude );
     $mech->content_contains($report->title);
-    $mech->content_contains('item-list__item__borough">Bromley');
+    my $id = $report->id;
+    $mech->content_like(qr{item-list__item__borough">\s+<span>FMS$id</span>\s+Bromley});
 
     $report->update({
         confirmed => \"current_timestamp-'7 weeks'::interval",
@@ -694,7 +707,7 @@ for my $host ( 'www.fixmystreet.com', 'tfl.fixmystreet.com' ) {
         my $text = $mech->get_text_body_from_email;
         like $text, qr/This is an update/, 'Right email';
         like $text, qr/street.tfl/, 'Right url';
-        like $text, qr/Street Care/, 'Right name';
+        like $text, qr/Streetcare/, 'Right name';
         like $email->as_string, qr/iEYI87gX6Upb\+tKYzrSmN83pTnv606AOtahHTepSm/, 'Right logo';
     };
 }
@@ -702,7 +715,7 @@ for my $host ( 'www.fixmystreet.com', 'tfl.fixmystreet.com' ) {
 subtest 'TfL staff can access TfL admin' => sub {
     $mech->log_in_ok( $staffuser->email );
     $mech->get_ok('/admin');
-    $mech->content_contains( 'This is the administration interface for' );
+    $mech->content_contains( 'Search Reports' );
 };
 
 subtest 'TLRN categories cannot be renamed' => sub {
@@ -820,9 +833,9 @@ for my $test (
         lat => 51.4039,
         lon => 0.018697,
         expected => [
+            'Abandoned Santander Cycle',
             'Accumulated Litter', # Tests TfL->_cleaning_categories
             'Bus stops',
-            'Countdown - not working',
             'Flooding',
             'Flytipping (Bromley)', # In the 'Street cleaning' group
             'Grit bins',
@@ -838,9 +851,9 @@ for my $test (
         lat => 51.4021,
         lon => 0.01578,
         expected => [
+            'Abandoned Santander Cycle',
             'Accumulated Litter', # Tests TfL->_cleaning_categories
             'Bus stops',
-            'Countdown - not working',
             'Flooding (Bromley)',
             'Flytipping (Bromley)', # In the 'Street cleaning' group
             'Grit bins',
@@ -855,8 +868,8 @@ for my $test (
         lat => 51.4039,
         lon => 0.018697,
         expected => [
+            'Abandoned Santander Cycle',
             'Bus stops',
-            'Countdown - not working',
             'Flooding',
             'Grit bins',
             'Pothole',
@@ -871,8 +884,8 @@ for my $test (
         lat => 51.4021,
         lon => 0.01578,
         expected => [
+            'Abandoned Santander Cycle',
             'Bus stops',
-            'Countdown - not working',
             'Flooding',
             'Grit bins',
             'Pothole',
@@ -887,9 +900,9 @@ for my $test (
         lat => 51.4039,
         lon => 0.018697,
         expected => [
+            'Abandoned Santander Cycle',
             'Accumulated Litter',
             'Bus stops',
-            'Countdown - not working',
             'Flooding',
             'Flytipping (Bromley)',
             'Grit bins',
@@ -905,9 +918,9 @@ for my $test (
         lat => 51.4021,
         lon => 0.01578,
         expected => [
+            'Abandoned Santander Cycle',
             'Accumulated Litter',
             'Bus stops',
-            'Countdown - not working',
             'Flooding (Bromley)',
             'Flytipping (Bromley)',
             'Grit bins',
@@ -922,8 +935,8 @@ for my $test (
         lat => 51.552287,
         lon => -0.063326,
         expected => [
+            'Abandoned Santander Cycle',
             'Bus stops',
-            'Countdown - not working',
             'Flooding',
             'Grit bins',
             'Pothole',
@@ -1105,10 +1118,10 @@ FixMyStreet::override_config {
 
     subtest 'RSS feed has correct name' => sub {
         $mech->get_ok('/rss/xsl');
-        $mech->content_contains('RSS feed from the Street Care website');
+        $mech->content_contains('RSS feed from the Streetcare website');
         $mech->content_lacks('FixMyStreet');
         $mech->get_ok('/rss/problems');
-        $mech->content_contains('New problems on Street Care');
+        $mech->content_contains('New problems on Streetcare');
         $mech->content_lacks('FixMyStreet');
     };
 };
@@ -1142,7 +1155,7 @@ FixMyStreet::override_config {
 subtest 'Bromley staff can access Bromley admin' => sub {
     $mech->log_in_ok( $bromleyuser->email );
     $mech->get_ok('/admin');
-    $mech->content_contains( 'This is the administration interface for' );
+    $mech->content_contains( 'Search Reports' );
     $mech->log_out_ok;
 };
 
@@ -1154,5 +1167,38 @@ subtest 'TfL staff cannot access Bromley admin' => sub {
 };
 
 };
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => [ 'tfl' ],
+    BASE_URL => 'http://www.example.org',
+    MAPIT_URL => 'http://mapit.uk/',
+    COBRAND_FEATURES => {
+        internal_ips => { tfl => [ '127.0.0.1' ] }, # To avoid 2-factor for test
+        borough_email_addresses => { tfl => {
+            'asset-operations-area-team' => [
+                {
+                    email => 'nothing@example.com',
+                    areas => [ 2483 ],
+                }]
+        }},
+        anonymous_account => { tfl => 'anonymous' }, # To remove uninitialised warning
+    }
+}, sub {
+
+subtest 'check contact creation allows email from borough email addresses' => sub {
+
+    $mech->log_in_ok($staffuser->email);
+    $mech->get_ok('/admin/body/' . $body->id);
+
+    $mech->submit_form_ok( { with_fields => {
+        category   => 'test category',
+        title_hint => 'example in test category',
+        email      => 'asset-operations-area-team',
+        state => 'confirmed',
+    } } );
+
+    $mech->content_lacks( 'Please enter a valid email' );
+
+}};
 
 done_testing();

@@ -43,18 +43,24 @@ sub index : Path : Args(0) {
     unless ( $c->get_param('sort') ) {
         $c->set_param('sort', 'created-asc');
     }
-    $c->stash->{body} = $c->forward('/reports/body_find', [ $c->cobrand->council_area ]);
+
+    # Do not set stash->{body} to the $body as we want to show all a cobrand's
+    # reports, not just ones for the body (normally this would be the same, but
+    # e.g. Bucks include parishes)
+    my $body = $c->forward('/reports/body_find', [ $c->cobrand->council_area ]);
+
     $c->forward( 'stash_report_filter_status' );
     $c->forward('/reports/stash_report_sort', [ $c->cobrand->reports_ordering ]);
     $c->forward( '/reports/load_and_group_problems' );
     $c->stash->{page} = 'reports'; # So the map knows to make clickable pins
 
+    $c->stash->{body} = { id => 0 }; # So the problems are output by the template
     if ($c->get_param('ajax')) {
         my $ajax_template = $c->stash->{ajax_template} || 'reports/_problem-list.html';
         $c->detach('/reports/ajax', [ $ajax_template ]);
     }
 
-    my @categories = $c->stash->{body}->contacts->not_deleted->search( undef, {
+    my @categories = $body->contacts->not_deleted->search( undef, {
         columns => [ 'id', 'category', 'extra' ],
         distinct => 1,
     } )->all_sorted;
@@ -65,7 +71,7 @@ sub index : Path : Args(0) {
     my %map_params = (
         latitude  => @$pins ? $pins->[0]{latitude} : 0,
         longitude => @$pins ? $pins->[0]{longitude} : 0,
-        area      => [ $c->stash->{wards} ? map { $_->{id} } @{$c->stash->{wards}} : keys %{$c->stash->{body}->areas} ],
+        area      => [ keys %{$body->areas} ],
         any_zoom  => 1,
     );
     FixMyStreet::Map::display_map(
@@ -83,10 +89,7 @@ sub setup_categories : Private {
     my ( $self, $c ) = @_;
 
     if ( $c->stash->{problem}->state eq 'for triage' ) {
-        $c->stash->{holding_options} = [ grep { $_->send_method && $_->send_method eq 'Triage' } @{$c->stash->{category_options}} ];
-        $c->stash->{holding_categories} = { map { $_->category => 1 } @{$c->stash->{holding_options}} };
-        $c->stash->{end_options} = [ grep { !$_->send_method || $_->send_method ne 'Triage' } @{$c->stash->{category_options}} ];
-        $c->stash->{end_categories} = { map { $_->category => 1 } @{$c->stash->{end_options}} };
+        $c->stash->{end_options} = [ grep { !$_->send_method || $_->send_method ne 'Triage' } @{$c->stash->{contacts}} ];
         delete $c->stash->{categories_hash};
         my %category_groups = ();
         for my $category (@{$c->stash->{end_options}}) {
@@ -109,9 +112,9 @@ sub update : Private {
     my $problem = $c->stash->{problem};
 
     my $current_category = $problem->category;
-    my $new_category = $c->get_param('category');
+    my $new_category_id = $c->get_param('category');
 
-    if (!$new_category) {
+    if (!$new_category_id) {
         my $errors = $c->stash->{errors} || [];
         push @$errors, _"Please choose a category";
         $c->stash->{errors} = $errors;
@@ -119,7 +122,10 @@ sub update : Private {
         $c->detach;
     }
 
-    my $changed = $c->forward('/admin/reports/edit_category', [ $problem, 1 ] );
+    my $contact = FixMyStreet::DB->resultset("Contact")->find($new_category_id);
+    my $new_category = $contact->category;
+
+    my $changed = $c->forward('/admin/reports/edit_category', [ $problem, 1, $contact ] );
 
     if ( $changed ) {
         $c->stash->{problem}->update( { state => 'confirmed' } );
@@ -136,6 +142,7 @@ sub update : Private {
             problem_state => $problem->state,
             extra => $extra,
             whensent => \'current_timestamp',
+            send_state => 'processed',
         } );
 
         my @alerts = FixMyStreet::DB->resultset('Alert')->search( {

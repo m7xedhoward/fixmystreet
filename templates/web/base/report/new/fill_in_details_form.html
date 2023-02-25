@@ -1,13 +1,20 @@
 [% PROCESS 'report/new/form_heading.html' %]
 
+<div id="js-roads-responsibility" class="box-warning hidden" aria-live="polite">
 [% TRY %][% INCLUDE 'report/new/roads_message.html' %][% CATCH file %][% END %]
+</div>
 
-<fieldset>
-    <div id="problem_form">
+<div id="problem_form">
 
-[% IF report.used_map %]
+[% IF report.used_map;
+    url_skip = c.uri_for(
+        '/report/new',
+        { pc = pc, latitude = latitude, longitude = longitude, skipped = 1 }
+    );
+%]
     <ul class="change_location">
         <li class="change_location__map">[% loc('Click the map or drag the pin to adjust the location') %]</li>
+        <li class="screen-reader-only skip-the-map">[% tprintf( loc('Can’t use the map? <a href="%s" rel="nofollow">Skip this step.</a>'), url_skip) %]</li>
         <li class="change_location__search">[% loc('Or <a href="/">search for a different location</a>') %]</li>
     </ul>
 [% END %]
@@ -27,8 +34,7 @@
 
 [% INCLUDE 'errors.html' %]
 
-        [% PROCESS 'report/new/form_report.html' %]
-        [% PROCESS 'report/new/form_user.html' %]
+    [% PROCESS 'report/new/form_report.html' %]
+    [% PROCESS 'report/new/form_user.html' %]
 
-    </div>
-</fieldset>
+</div>

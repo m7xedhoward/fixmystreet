@@ -105,9 +105,12 @@ fixmystreet.staff_set_up = {
         if (val === 'myself') {
             $emailInput.val($emailInput.prop('defaultValue')).prop('disabled', true);
             $emailOptionalLabel.addClass('hidden');
-            $nameInput.val($nameInput.prop('defaultValue')).prop('disabled', false);
-            $phoneInput.val($phoneInput.prop('defaultValue')).prop('disabled', false);
-            $showNameCheckbox.prop('checked', false).prop('disabled', false);
+            $nameInput.val($nameInput.prop('defaultValue')).prop('disabled', false).prop('readonly', true);
+            $phoneInput.val($phoneInput.prop('defaultValue')).prop('disabled', true);
+            if (fixmystreet.cobrand !== 'fixamingata') {
+                $showNameCheckbox.prop('checked', false);
+            }
+            $showNameCheckbox.prop('disabled', false);
             $addAlertCheckbox.prop('checked', true).prop('disabled', false);
         } else if (val === 'another_user') {
             $emailInput.val('').prop('disabled', false);
@@ -119,7 +122,7 @@ fixmystreet.staff_set_up = {
                 $emailOptionalLabel.removeClass('hidden');
                 $emailInput.removeClass('required');
             }
-            $nameInput.val('').prop('disabled', false);
+            $nameInput.val('').prop('disabled', false).prop('readonly', false);
             $phoneInput.val('').prop('disabled', false);
             $showNameCheckbox.prop('checked', false).prop('disabled', true);
             $addAlertCheckbox.prop('checked', true).prop('disabled', false);
@@ -235,9 +238,9 @@ fixmystreet.staff_set_up = {
         var $checkbox = $(this);
         var toggle_public_update = function() {
             if ($checkbox.prop('checked')) {
-                $('#public_update_form_fields').show();
+                $('#public_update_form_fields').removeClass('hidden-js');
             } else {
-                $('#public_update_form_fields').hide();
+                $('#public_update_form_fields').addClass('hidden-js');
             }
         };
         $checkbox.on('change', function() {
@@ -454,12 +457,14 @@ $(function() {
 });
 
 $(fixmystreet).on('display:report', function() {
+    fixmystreet.staff_set_up.contribute_as();
     fixmystreet.staff_set_up.moderation();
     fixmystreet.staff_set_up.response_templates();
     if ($("#report_inspect_form").length) {
         fixmystreet.staff_set_up.report_page_inspect();
         fixmystreet.staff_set_up.action_scheduled_raise_defect();
     }
+    $('.js-contribute-as').change();
 });
 
 $(fixmystreet).on('report_new:category_change', function() {

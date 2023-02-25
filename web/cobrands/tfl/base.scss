@@ -61,7 +61,7 @@ h3 {
     @include tflbutton;
 }
 
-.form-control, .dropzone {
+.form-control {
     @include tflfield;
 }
 
@@ -293,4 +293,7 @@ ol.big-numbers>li {
 
 .item-list__item__borough {
     font-style: normal;
+    span {
+        margin-right: 1em;
+    }
 }

@@ -86,6 +86,7 @@ create table roles (
     body_id         integer not null references body(id) ON DELETE CASCADE,
     name            text,
     permissions     text ARRAY,
+    extra           text,
     unique(body_id, name)
 );
 
@@ -113,7 +114,7 @@ create table contacts (
     -- last editor
     editor text not null,
     -- time of last change
-    whenedited timestamp not null, 
+    whenedited timestamp not null,
     -- what the last change was for: author's notes
     note text not null,
 
@@ -151,13 +152,13 @@ create table contacts_history (
     -- editor
     editor text not null,
     -- time of entry
-    whenedited timestamp not null, 
+    whenedited timestamp not null,
     -- what the change was for: author's notes
     note text not null
 );
 
 -- Create a trigger to update the contacts history on any update
--- to the contacts table. 
+-- to the contacts table.
 create function contacts_updated()
     returns trigger as '
     begin
@@ -201,7 +202,7 @@ create table problem (
     used_map boolean not null,
 
     -- User's details
-    user_id int references users(id) not null,    
+    user_id int references users(id) not null,
     name text not null,
     anonymous boolean not null,
 
@@ -227,10 +228,11 @@ create table problem (
     response_priority_id int REFERENCES response_priorities(id),
 
     -- logging sending failures (used by webservices)
-    send_fail_count integer not null default 0, 
-    send_fail_reason text, 
+    send_fail_count integer not null default 0,
+    send_fail_reason text,
     send_fail_timestamp timestamp,
-    
+    send_fail_body_ids int array not null default '{}',
+
     -- record send_method used, which can be used to infer usefulness of external_id
     send_method_used text,
 
@@ -249,6 +251,7 @@ create table problem (
 );
 create index problem_state_latitude_longitude_idx on problem(state, latitude, longitude);
 create index problem_user_id_idx on problem ( user_id );
+create index problem_external_id_idx on problem(external_id);
 create index problem_external_body_idx on problem(lower(external_body));
 create index problem_radians_latitude_longitude_idx on problem(radians(latitude), radians(longitude));
 create index problem_bodies_str_array_idx on problem USING gin(regexp_split_to_array(bodies_str, ','));
@@ -357,15 +360,23 @@ create table comment (
     -- and should be highlighted in the display?
     external_id text,
     extra text,
+    send_state text not null default 'unprocessed' check (
+        send_state = 'unprocessed'
+        or send_state = 'processed'
+        or send_state = 'skipped'
+        or send_state = 'sent'
+    ),
     send_fail_count integer not null default 0,
     send_fail_reason text,
     send_fail_timestamp timestamp,
-    whensent timestamp
+    whensent timestamp,
+    private_email_text text
 );
 
 create index comment_user_id_idx on comment(user_id);
 create index comment_problem_id_idx on comment(problem_id);
 create index comment_problem_id_created_idx on comment(problem_id, created);
+create index comment_state_send_state_idx on comment(state, send_state);
 create index comment_fulltext_idx on comment USING GIN(
     to_tsvector(
         'english',
@@ -421,7 +432,7 @@ create index alert_whensubscribed_confirmed_cobrand_idx on alert(whensubscribed,
 -- Possible indexes - unique (alert_type,user_id,parameter)
 
 create table alert_sent (
-    alert_id integer not null references alert(id),
+    alert_id integer not null references alert(id) ON DELETE CASCADE,
     parameter text, -- e.g. Update ID for new updates
     whenqueued timestamp not null default current_timestamp
 );
@@ -459,7 +470,7 @@ create table textmystreet (
 -- Record basic information about edits made through the admin interface
 
 create table admin_log (
-    id serial not null primary key, 
+    id serial not null primary key,
     admin_user text not null,
     object_type text not null check (
       object_type = 'problem'
@@ -478,7 +489,7 @@ create table admin_log (
     user_id int references users(id) null,
     reason text not null default '',
     time_spent int not null default 0
-); 
+);
 
 create table moderation_original_data (
     id serial not null primary key,
@@ -512,8 +523,8 @@ create table user_body_permissions (
 
 create table user_planned_reports (
     id serial not null primary key,
-    user_id int references users(id) not null,
-    report_id int references problem(id) not null,
+    user_id int references users(id) ON DELETE CASCADE not null,
+    report_id int references problem(id) ON DELETE CASCADE not null,
     added timestamp not null default current_timestamp,
     removed timestamp
 );
@@ -523,6 +534,7 @@ create table response_templates (
     body_id int references body(id) not null,
     title text not null,
     text text not null,
+    email_text text,
     created timestamp not null default current_timestamp,
     auto_response boolean NOT NULL DEFAULT 'f',
     state text,

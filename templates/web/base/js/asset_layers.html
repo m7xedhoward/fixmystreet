@@ -1,0 +1,22 @@
+[% FILTER collapse %]
+
+var fixmystreet = fixmystreet || {};
+
+(function(){
+
+if (!fixmystreet.maps) {
+    return;
+}
+
+var defaults;
+
+[% FOR cobrand IN asset_layers %]
+    defaults = [% cobrand.default | safe %];
+    [% FOR layer IN cobrand.layers %]
+        fixmystreet.assets.add(defaults.[% layer.default %], [% layer.data | safe %]);
+    [% END %]
+[% END %]
+
+})();
+
+[% END %]

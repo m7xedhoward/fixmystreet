@@ -157,15 +157,22 @@ sub html_paragraph_email_factory : FilterFactory('html_para_email') {
 }
 
 sub sanitize {
-    my $text = shift;
+    my ($text, $admin) = @_;
+
+    return '' unless defined $text;
+
+    # In case of markdown variant style of <https://www.google.com>
+    $text =~ s/<\s*(https?[^\s>]+)\s*>/$1/g;
 
     $text = $$text if UNIVERSAL::isa($text, 'FixMyStreet::Template::SafeString');
- 
+
     my %allowed_tags = map { $_ => 1 } qw( p ul ol li br b i strong em );
+    my %admin_tags = ( p => { class => 1, id => 1, style => 1 } );
     my $scrubber = HTML::Scrubber->new(
         rules => [
             %allowed_tags,
-            a => { href => qr{^(http|/|tel)}i, style => 1, target => qr/^_blank$/, title => 1, class => qr/^js-/ },
+            $admin ? %admin_tags : (),
+            a => { href => qr{^(http|/|tel|mailto)}i, style => 1, target => qr/^_blank$/, title => 1, class => qr/^js-/ },
             img => { src => 1, alt => 1, width => 1, height => 1, hspace => 1, vspace => 1, align => 1, sizes => 1, srcset => 1 },
             font => { color => 1 },
             span => { style => 1 },
@@ -185,13 +192,14 @@ it all to text.
 
 sub email_sanitize_text : Fn('email_sanitize_text') {
     my $update = shift;
+    my $column = shift;
 
-    my $text = $update->{item_text};
+    my $text = $column ? $update->{$column} : $update->{item_text};
     my $extra = $update->{item_extra};
     utf8::encode($extra) if $extra;
     $extra = $extra ? RABX::wire_rd(new IO::String($extra)) : {};
 
-    my $staff = $extra->{is_superuser} || $extra->{is_body_user};
+    my $staff = $extra->{is_superuser} || $extra->{is_body_user} || $column;
 
     return $text unless $staff;
 
@@ -220,8 +228,8 @@ sub _sanitize_elt {
         $list_type = $_->tag, $list_num = 1 if $_->tag eq 'ol' || $_->tag eq 'ul';
         _sanitize_elt($_);
         $_->replace_with("\n") if $_->tag eq 'br';
-        $_->replace_with('[image: ', $_->attr('alt'), ']') if $_->tag eq 'img';
-        $_->replace_with($_->as_text, ' [', $_->attr('href'), ']') if $_->tag eq 'a';
+        $_->replace_with('[image: ', $_->attr('alt') || '', ']') if $_->tag eq 'img';
+        $_->replace_with($_->as_text, ' [', $_->attr('href') || '', ']') if $_->tag eq 'a';
         $_->replace_with_content if $_->tag eq 'span' || $_->tag eq 'font';
         $_->replace_with_content if $_->tag eq 'ul' || $_->tag eq 'ol';
         if ($_->tag eq 'li') {
@@ -245,13 +253,14 @@ in updates from staff/superusers.
 
 sub email_sanitize_html : Fn('email_sanitize_html') {
     my $update = shift;
+    my $column = shift;
 
-    my $text = $update->{item_text};
+    my $text = $column ? $update->{$column} : $update->{item_text};
     my $extra = $update->{item_extra};
     utf8::encode($extra) if $extra;
     $extra = $extra ? RABX::wire_rd(new IO::String($extra)) : {};
 
-    my $staff = $extra->{is_superuser} || $extra->{is_body_user};
+    my $staff = $extra->{is_superuser} || $extra->{is_body_user} || $column;
 
     return _staff_html_markup($text, $staff);
 }

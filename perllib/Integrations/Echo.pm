@@ -1,9 +1,13 @@
 package Integrations::Echo;
 
 use Moo;
+use strict;
+use warnings;
 with 'FixMyStreet::Roles::SOAPIntegration';
+with 'FixMyStreet::Roles::ParallelAPI';
 
 use DateTime;
+use File::Temp;
 use FixMyStreet;
 
 has attr => ( is => 'ro', default => 'http://www.twistedfish.com/xmlns/echo/api/v1' );
@@ -44,6 +48,8 @@ has security => (
         );
     },
 );
+
+has backend_type => ( is => 'ro', default => 'echo' );
 
 sub action_hdr {
     my ($self, $method) = @_;
@@ -381,9 +387,10 @@ sub GetServiceTaskInstances {
 }
 
 sub GetEvent {
-    my ($self, $guid) = @_;
+    my ($self, $guid, $type) = @_;
+    $type ||= 'Guid';
     $self->call('GetEvent', ref => ixhash(
-        Key => 'Guid',
+        Key => $type,
         Type => 'Event',
         Value => { 'msArray:anyType' => $guid },
     ));
@@ -401,6 +408,7 @@ sub GetEventsForObject {
         return [ {
             # Missed collection for service 542 (food waste)
             EventTypeId => 2100,
+            EventDate => { DateTime => "2020-05-18T17:00:00Z" },
             ServiceId => 542,
         }, { # And a gate not closed
             EventTypeId => 2118,
@@ -423,6 +431,7 @@ sub GetEventsForObject {
         return [ {
             # Missed collection for service 537 (paper)
             EventTypeId => 2099,
+            EventDate => { DateTime => "2020-05-27T16:00:00Z" },
             ServiceId => 537,
         } ] if $type eq 'ServiceUnit' && $id == 1002;
         return [];

@@ -3,6 +3,9 @@ use FixMyStreet::TestMech;
 use HTML::Selector::Element qw(find);
 use FixMyStreet::Script::Reports;
 
+FixMyStreet::App->log->disable('info');
+END { FixMyStreet::App->log->enable('info'); }
+
 my $mech = FixMyStreet::TestMech->new;
 my $cobrand = Test::MockModule->new('FixMyStreet::Cobrand::Merton');
 
@@ -13,13 +16,15 @@ my $merton = $mech->create_body_ok(2500, 'Merton Council', {
     jurisdiction => 'merton',
     endpoint => 'http://endpoint.example.org',
     send_method => 'Open311',
+}, {
+    cobrand => 'merton'
 });
 my @cats = ('Litter', 'Other', 'Potholes', 'Traffic lights');
 for my $contact ( @cats ) {
     $mech->create_contact_ok(body_id => $merton->id, category => $contact, email => "\L$contact\@merton.example.org");
 }
 
-my $hackney = $mech->create_body_ok(2508, 'Hackney Council');
+my $hackney = $mech->create_body_ok(2508, 'Hackney Council', {}, { cobrand => 'hackney' });
 for my $contact ( @cats ) {
     $mech->create_contact_ok(body_id => $hackney->id, category => $contact, email => "\L$contact\@hackney.example.org");
 }
@@ -98,7 +103,7 @@ FixMyStreet::override_config {
 
         is $report->bodies_str, $merton->id;
         is $report->name, 'Anonymous user';
-        is $report->user->email, 'anonymous@fixmystreet.merton.gov.uk';
+        is $report->user->email, 'anonymous@anonymous-fms.merton.gov.uk';
         is $report->anonymous, 1; # Doesn't change behaviour here, but uses anon account's name always
         is $report->get_extra_metadata('contributed_as'), 'anonymous_user';
 
@@ -219,8 +224,19 @@ FixMyStreet::override_config {
     };
 
     subtest 'ensure USRN is added to report when sending over open311' => sub {
-        my $ukc = Test::MockModule->new('FixMyStreet::Cobrand::UKCouncils');
-        $ukc->mock('lookup_site_code', sub { 'USRN1234' });
+        my $ukc = Test::MockModule->new('FixMyStreet::Cobrand::Merton');
+        $ukc->mock('_fetch_features', sub {
+            my ($self, $cfg, $x, $y) = @_;
+            return [
+                {
+                    properties => { usrn => 'USRN1234' },
+                    geometry => {
+                        type => 'LineString',
+                        coordinates => [ [ $x-2, $y+2 ], [ $x+2, $y+2 ] ],
+                    }
+                },
+            ];
+        });
 
         my ($report) = $mech->create_problems_for_body(1, $merton->id, 'Test report', {
             category => 'Litter', cobrand => 'merton',
@@ -233,6 +249,53 @@ FixMyStreet::override_config {
         ok $report->whensent, 'report was sent';
         is $report->get_extra_field_value('usrn'), 'USRN1234', 'correct USRN recorded in extra data';
     };
+};
+
+subtest "hides duplicate updates from endpoint" => sub {
+    my $dt = DateTime->now(formatter => DateTime::Format::W3CDTF->new)->add( minutes => -5 );
+    my ($p) = $mech->create_problems_for_body(1, $merton->id, '', { lastupdate => $dt });
+    $p->update({ external_id => "merton-" . $p->id });
+
+    my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>UPDATE_1</update_id>
+    <service_request_id>SERVICE_ID</service_request_id>
+    <status>IN_PROGRESS</status>
+    <description>This is a note</description>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    <request_update>
+    <update_id>UPDATE_2</update_id>
+    <service_request_id>SERVICE_ID</service_request_id>
+    <status>IN_PROGRESS</status>
+    <description>This is a note</description>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+
+    my $update_dt = DateTime->now(formatter => DateTime::Format::W3CDTF->new);
+
+    $requests_xml =~ s/SERVICE_ID/merton-@{[$p->id]}/g;
+    $requests_xml =~ s/UPDATED_DATETIME/$update_dt/g;
+
+    my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com');
+    Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+    my $update = Open311::GetServiceRequestUpdates->new(
+        system_user => $counciluser,
+        current_open311 => $o,
+        current_body => $merton,
+    );
+    FixMyStreet::override_config {
+        ALLOWED_COBRANDS => 'merton',
+    }, sub {
+        $update->process_body;
+    };
+
+    $p->discard_changes;
+    is $p->comments->search({ state => 'confirmed' })->count, 1;
 };
 
 done_testing;

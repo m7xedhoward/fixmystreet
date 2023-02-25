@@ -1,4 +1,24 @@
 describe("Oxfordshire cobrand", function() {
+  it("looks up private street light information", function() {
+    cy.server();
+    cy.route('/report/new/ajax*').as('report-ajax');
+    cy.route('*oxfordshire.staging*', 'fixture:oxon-street-lights.json').as('street-lights-layer');
+    cy.visit('http://oxfordshire.localhost:3001/report/new?latitude=51.754926&longitude=-1.256179');
+    cy.wait('@report-ajax');
+    cy.pickCategory('Lamp Out of Light');
+    cy.wait('@street-lights-layer');
+    cy.get('#map_sidebar').scrollTo('bottom');
+    cy.get('.js-reporting-page--next:visible').should('be.disabled');
+    cy.get('circle').eq(1).click(); // Click a public light
+    cy.get("#category_meta_message_LampOutofLight").should('not.contain', 'private street light asset');
+    cy.get('#map_sidebar').scrollTo('bottom');
+    cy.get('.js-reporting-page--next:visible').should('not.be.disabled');
+    cy.get('circle').eq(0).click(); // Click a private light
+    cy.get("#category_meta_message_LampOutofLight").should('contain', 'private street light asset');
+    cy.get('#map_sidebar').scrollTo('bottom');
+    cy.get('.js-reporting-page--next:visible').should('be.disabled');
+  });
+
   it("allows inspectors to instruct defects", function() {
     cy.server();
     cy.route('/report/*').as('show-report');
@@ -70,7 +90,7 @@ describe("Oxfordshire cobrand", function() {
 
             // check details
             rtype.right_details.forEach(function(rdetail) {
-                cy.get('@didetail').select(rdetail);
+                cy.get('@didetail').find('optgroup', "'" + rtype.typename + "'").contains(new RegExp('^' + rdetail + '$')).should('be.visible');
             });
             rtype.wrong_details.forEach( function(wdetail) {
                 cy.get('@didetail').contains(new RegExp('^' + wdetail + '$')).parent('optgroup').should('not.be.visible');
@@ -84,11 +104,8 @@ describe("Oxfordshire cobrand", function() {
 
     var sweepfill = {
         typename: 'Sweep & Fill',
-        right_details: [ 'Pothole Sweep & Fill 0-1m²', 'Pothole Cluster Sweep & Fill 1-2m²' ],
+        right_details: [ '0-1m²', '1-2m²' ],
         wrong_details: [
-             '0-1m²',
-             '1-2m²',
-             'Pothole Cluster',
              '1 kerb unit or I liner length',
              'Greater than 1 kerb unit or I liner length',
              'Blockage raised as a defect'
@@ -98,24 +115,8 @@ describe("Oxfordshire cobrand", function() {
         typename: 'Pothole (Permanent)',
         right_details: [ '0-1m²', '1-2m²' ],
         wrong_details: [
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             '1 kerb unit or I liner length',
             'Greater than 1 kerb unit or I liner length',
-            'Blockage raised as a defect'
-        ]
-    };
-    var pothole_cluster = {
-        typename: 'Pothole Cluster (Permanent)',
-        right_details: [ 'Pothole Cluster' ],
-        wrong_details: [
-            '0-1m²',
-            '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            '1 kerb unit or I liner length',
-           'Greater than 1 kerb unit or I liner length',
             'Blockage raised as a defect'
         ]
     };
@@ -128,9 +129,6 @@ describe("Oxfordshire cobrand", function() {
         wrong_details: [
             '0-1m²',
             '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             'Blockage raised as a defect'
         ]
     };
@@ -143,9 +141,6 @@ describe("Oxfordshire cobrand", function() {
         wrong_details: [
             '0-1m²',
             '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             'Blockage raised as a defect'
         ]
     };
@@ -158,9 +153,6 @@ describe("Oxfordshire cobrand", function() {
         wrong_details: [
             '0-1m²',
             '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             'Blockage raised as a defect'
         ]
     };
@@ -173,9 +165,6 @@ describe("Oxfordshire cobrand", function() {
         wrong_details: [
             '0-1m²',
             '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             'Blockage raised as a defect'
         ]
     };
@@ -187,16 +176,13 @@ describe("Oxfordshire cobrand", function() {
         wrong_details: [
             '0-1m²',
             '1-2m²',
-            'Pothole Sweep & Fill 0-1m²',
-            'Pothole Cluster Sweep & Fill 1-2m²',
-            'Pothole Cluster',
             '1 kerb unit or I liner length',
             'Greater than 1 kerb unit or I liner length'
         ]
     };
 
     (function() {
-        var right_types = [ sweepfill, pothole, pothole_cluster ];
+        var right_types = [ sweepfill, pothole ];
         var wrong_types = [ damaged, loose, misaligned, missing, blockage ];
 
         testDefectDropdowns('Minor Carriageway', right_types, wrong_types);
@@ -206,7 +192,7 @@ describe("Oxfordshire cobrand", function() {
 
     (function() {
         var right_types = [ damaged, loose, misaligned, missing ];
-        var wrong_types = [ sweepfill, pothole, pothole_cluster, blockage ];
+        var wrong_types = [ sweepfill, pothole, blockage ];
 
         testDefectDropdowns('Kerbing', right_types, wrong_types);
         cy.log('Kerbing category types & details are correct');
@@ -214,7 +200,7 @@ describe("Oxfordshire cobrand", function() {
 
     (function() {
         var right_types = [ blockage ];
-        var wrong_types = [ sweepfill, pothole, pothole_cluster, damaged, loose, misaligned, missing ];
+        var wrong_types = [ sweepfill, pothole, damaged, loose, misaligned, missing ];
 
         testDefectDropdowns('Drainage', right_types, wrong_types);
         cy.log('Drainage category types & details are correct');

@@ -81,6 +81,16 @@ sub check_page_allowed : Private {
         }
     } elsif ($c->user->from_body && (!$cobrand_body || $cobrand_body->id == $c->user->from_body->id)) {
         $body = $c->user->from_body;
+
+        my @extra_bodies = $c->cobrand->call_hook('dashboard_extra_bodies');
+        if (@extra_bodies) {
+            $c->stash->{default_body} = $c->user->from_body;
+            $c->stash->{extra_bodies} = \@extra_bodies;
+            if ($c->get_param('body')) {
+                my @found = grep { $_->id == $c->get_param('body') } @extra_bodies;
+                $body = $found[0] if @found;
+            }
+        }
     } elsif ($c->action eq 'dashboard/heatmap' && $c->cobrand->feature('heatmap_dashboard_body')) {
         # Heatmap might be able to be seen by more people
         $body = $c->cobrand->call_hook('dashboard_body');
@@ -108,7 +118,9 @@ sub index : Path : Args(0) {
     if ($body) {
         $c->stash->{body_name} = $body->name;
 
-        my $children = $c->stash->{children} = $body->first_area_children;
+        $c->stash->{roles} = [ $body->roles->all ];
+
+        my $children = $c->stash->{children} = $body->area_children;
 
         $c->forward('/admin/fetch_contacts');
         $c->stash->{contacts} = [ $c->stash->{contacts}->all ];
@@ -117,6 +129,7 @@ sub index : Path : Args(0) {
         # See if we've had anything from the body dropdowns
         $c->stash->{category} = $c->get_param('category');
         $c->stash->{ward} = [ $c->get_param_list('ward') ];
+
         if ($c->user_exists) {
             if (my @areas = @{$c->user->area_ids || []}) {
                 $c->stash->{ward} = $c->user->area_ids;
@@ -137,6 +150,7 @@ sub index : Path : Args(0) {
     $c->stash->{start_date} = $c->get_param('start_date') || $days30->strftime('%Y-%m-%d');
     $c->stash->{end_date} = $c->get_param('end_date');
     $c->stash->{q_state} = $c->get_param('state') || '';
+    $c->stash->{q_role} = $c->get_param('role') || undef;
 
     my $reporting = $c->forward('construct_rs_filter', [ $c->get_param('updates') ]);
 
@@ -175,6 +189,7 @@ sub construct_rs_filter : Private {
         body => $c->stash->{body} || undef,
         start_date => $c->stash->{start_date},
         end_date => $c->stash->{end_date},
+        role_id => $c->stash->{q_role},
         user => $c->user_exists ? $c->user->obj : undef,
     );
 
@@ -394,12 +409,17 @@ sub heatmap : Local : Args(0) {
         $c->detach('/reports/ajax', [ 'dashboard/heatmap-list.html' ]);
     }
 
-    my $children = $c->stash->{body}->first_area_children;
+    my $children = $c->stash->{body}->area_children;
     $c->stash->{children} = $children;
     $c->stash->{ward_hash} = { map { $_->{id} => 1 } @{$c->stash->{wards}} } if $c->stash->{wards};
 
     $c->forward('/reports/setup_categories');
     $c->forward('/reports/setup_map');
+
+    if (!%{$c->stash->{filter_category}}) {
+        my $cats = $c->user->categories;
+        $c->stash->{filter_category} = { map { $_ => 1 } @$cats } if @$cats;
+    }
 }
 
 sub heatmap_filters :Private {
@@ -414,6 +434,12 @@ sub heatmap_filters :Private {
             $where->{areas} = [
                 map { { 'like', '%,' . $_ . ',%' } } @areas
             ];
+        }
+
+        # Default to user categories if no categories given
+        if (!$where->{'me.category'}) {
+            my $cats = $c->user->categories;
+            $where->{'me.category'} = $cats if @$cats;
         }
     }
 

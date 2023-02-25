@@ -61,9 +61,14 @@ sub index : Path : Args(0) {
     }
 
     if ($c->stash->{body}) {
-        my $children = $c->stash->{body}->first_area_children;
+        my $children = $c->stash->{body}->area_children;
         unless ($children->{error}) {
             $c->stash->{children} = $children;
+        }
+        my $parish_ward = {};
+        $c->cobrand->call_hook('add_parish_wards' => $parish_ward);
+        unless ($parish_ward->{error}) {
+            $c->stash->{parish_ward} = $parish_ward;
         }
     } else {
         my @bodies = $c->model('DB::Body')->search(undef, {
@@ -121,6 +126,8 @@ sub ward : Path : Args(2) {
     my @wards = $c->get_param('wards') ? $c->get_param_list('wards', 1) : split /\|/, $ward || "";
     $c->forward( 'body_check', [ $body ] );
 
+    $c->stash->{ward_code} = $c->get_param('type') if $c->get_param('type');
+
     # If viewing multiple wards, rewrite the url from
     # /reports/Borsetshire?ward=North&ward=East
     # to
@@ -164,21 +171,33 @@ sub ward : Path : Args(2) {
     $c->stash->{rss_url} = '/rss/reports/' . $body_short;
     $c->stash->{rss_url} .= '/' . $c->cobrand->short_name( $c->stash->{ward} )
         if $c->stash->{ward};
-
+    $c->stash->{rss_url} .= "?type=" . $c->stash->{ward_code} if $c->stash->{ward_code};
     $c->stash->{stats} = $c->cobrand->get_report_stats();
 
     $c->forward('setup_map');
 
     # List of wards
     if ( !$c->stash->{wards} && $c->stash->{body}->id && $c->stash->{body}->body_areas->first ) {
-        my $children = $c->stash->{body}->first_area_children;
+        my $children = $c->stash->{body}->area_children;
         unless ($children->{error}) {
             foreach (values %$children) {
                 $_->{url} = $c->uri_for( $c->stash->{body_url}
-                    . '/' . $c->cobrand->short_name( $_ )
+                    . '/' . $c->cobrand->short_name( $_ ),
+                    { type => $_->{type} }
                 );
             }
             $c->stash->{children} = $children;
+        }
+        my $parish_ward = {};
+        $c->cobrand->call_hook('add_parish_wards' => $parish_ward);
+        unless ($parish_ward->{error}) {
+            foreach (values %$parish_ward) {
+                $_->{url} = $c->uri_for( $c->stash->{body_url}
+                    . '/' . $c->cobrand->short_name( $_ ),
+                    { type => $_->{type} }
+                );
+            }
+            $c->stash->{parish_ward} = $parish_ward;
         }
     }
 }
@@ -254,7 +273,7 @@ sub rss_area_ward : Path('/rss/area') : Args(2) {
         ($c->stash->{area}) = values %$areas;
     } else {
         foreach (keys %$areas) {
-            if (lc($areas->{$_}->{name}) eq lc($area) || $areas->{$_}->{name} =~ /^\Q$area\E (Borough|City|District|County) Council$/i) {
+            if (lc($areas->{$_}->{name}) eq lc($area) || $areas->{$_}->{name} =~ /^\Q$area\E (Borough|City|District|County|Parish|Town) Council$/i) {
                 $c->stash->{area} = $areas->{$_};
             }
         }
@@ -301,6 +320,7 @@ sub rss_body : Path('/rss/reports') : Args(1) {
 sub rss_ward : Path('/rss/reports') : Args(2) {
     my ( $self, $c, $body, $ward ) = @_;
 
+    $c->stash->{ward_code} = $c->get_param('type') || '';
     $c->stash->{rss} = 1;
 
     $c->forward( 'body_check', [ $body ] );
@@ -365,13 +385,16 @@ sub body_find : Private {
     my ($self, $c, $q_body) = @_;
 
     # We must now have a string to check
-    my @bodies = $c->model('DB::Body')->search( { name => { -like => "$q_body%" } } )->all;
+    my @bodies = $c->model('DB::Body')->search(
+        { name => { -like => "$q_body%" } },
+        { order_by => 'deleted' } # Prefer active over deleted
+    )->all;
 
     if (@bodies == 1) {
         return $bodies[0];
     } else {
         foreach (@bodies) {
-            if (lc($_->name) eq lc($q_body) || $_->name =~ /^\Q$q_body\E (Borough|City|District|County) Council$/i) {
+            if (lc($_->name) eq lc($q_body) || $_->name =~ /^\Q$q_body\E (Borough|City|District|County|Parish|Town) Council$/i) {
                 return $_;
             }
         }
@@ -406,7 +429,6 @@ sub ward_check : Private {
         s/\.html//;
         s{_}{/}g;
     }
-
     # Could be from RSS area, or body...
     my $parent_id;
     if ( $c->stash->{body} ) {
@@ -418,13 +440,21 @@ sub ward_check : Private {
     }
 
     my $qw = $c->cobrand->fetch_area_children($parent_id);
+    $c->cobrand->call_hook('add_parish_wards' => $qw);
+
+    $qw = [values %$qw];
+    if ($c->stash->{ward_code}) {
+        @$qw = grep { $_->{type} eq $c->stash->{ward_code} } @$qw;
+    }
+
     my %names = map { $c->cobrand->short_name({ name => $_ }) => 1 } @wards;
     my @areas;
-    foreach my $area (sort { $a->{name} cmp $b->{name} } values %$qw) {
+    foreach my $area (sort { $a->{name} cmp $b->{name} } @$qw) {
         my $name = $c->cobrand->short_name($area);
         push @areas, $area if $names{$name};
     }
     if (@areas) {
+        $c->stash->{ward_type} = $c->cobrand->call_hook('get_ward_type' => ($areas[0])->{type});
         $c->stash->{ward} = $areas[0] if @areas == 1;
         $c->stash->{wards} = \@areas;
         return;
@@ -481,7 +511,7 @@ sub summary : Private {
 
     $c->stash->{group_by_default} = 'category';
 
-    my $children = $c->stash->{body}->first_area_children;
+    my $children = $c->stash->{body}->area_children;
     $c->stash->{children} = $children;
 
     $c->forward('/admin/fetch_contacts');
@@ -728,6 +758,7 @@ sub stash_report_filter_status : Private {
     @status = ($c->stash->{page} eq 'my' ? 'all' : $c->cobrand->on_map_default_status) unless @status;
     $c->cobrand->call_hook(hook_report_filter_status => \@status);
 
+    my $visible = FixMyStreet::DB::Result::Problem->visible_states();
     my %status = map { $_ => 1 } @status;
     my %filter_problem_states;
     my %filter_status;
@@ -752,9 +783,8 @@ sub stash_report_filter_status : Private {
     }
 
     if ($status{all}) {
-        my $s = FixMyStreet::DB::Result::Problem->visible_states();
         # %filter_status = ();
-        %filter_problem_states = %$s;
+        %filter_problem_states = %$visible;
     }
 
     if ($status{shortlisted}) {
@@ -769,7 +799,7 @@ sub stash_report_filter_status : Private {
     my $staff_user = $c->user_exists && ($c->user->is_superuser || $body_user);
     if ($staff_user || $c->cobrand->call_hook('filter_show_all_states')) {
         $c->stash->{filter_states} = $c->cobrand->state_groups_inspect;
-        foreach my $state (FixMyStreet::DB::Result::Problem->visible_states()) {
+        foreach my $state (keys %$visible) {
             if ($status{$state}) {
                 $filter_problem_states{$state} = 1;
                 $filter_status{$state} = 1;
@@ -785,6 +815,8 @@ sub stash_report_filter_status : Private {
       my $s = FixMyStreet::DB::Result::Problem->open_states();
       %filter_problem_states = (%filter_problem_states, %$s);
     }
+
+    %filter_problem_states = map { $_ => 1 } grep { $visible->{$_} } keys %filter_problem_states;
 
     $c->stash->{filter_problem_states} = \%filter_problem_states;
     $c->stash->{filter_status} = \%filter_status;

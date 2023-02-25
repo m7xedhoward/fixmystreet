@@ -1,0 +1,25 @@
+{
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type":"Feature",
+            "geometry":{"type":"Point","coordinates":[-1.257263,51.754730]},
+            "properties":{
+                "itemId":"private-light",
+                "private": true,
+                "unit_type": "Light",
+                "title":"002"
+            }
+        },
+        {
+            "type":"Feature",
+            "geometry":{"type":"Point","coordinates":[-1.254822,51.754770]},
+            "properties":{
+                "itemId":"public-light",
+                "private": false,
+                "unit_type": "Wall Mounted Light",
+                "title":"FP2"
+            }
+        }
+    ]
+}

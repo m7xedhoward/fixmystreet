@@ -55,6 +55,7 @@ sub send_alert_type {
                $item_table.problem_state as item_problem_state,
                $item_table.cobrand as item_cobrand,
                $item_table.extra as item_extra,
+               $item_table.private_email_text as item_private_email_text,
                $head_table.*
         from alert, $item_table, $head_table
             where alert.parameter::integer = $head_table.id
@@ -85,14 +86,13 @@ sub send_alert_type {
     my $last_problem_state = 'confirmed';
     my %data = ( template => $alert_type->template, data => [], schema => $schema );
     while (my $row = $query->fetchrow_hashref) {
-
         $row->{is_new_update} = defined($row->{item_text});
 
         my $cobrand = FixMyStreet::Cobrand->get_class_for_moniker($row->{alert_cobrand})->new();
         $cobrand->set_lang_and_domain( $row->{alert_lang}, 1, FixMyStreet->path_to('locale')->stringify );
 
-        # Cobranded and non-cobranded messages can share a database. In this case, the conf file 
-        # should specify a vhost to send the reports for each cobrand, so that they don't get sent 
+        # Cobranded and non-cobranded messages can share a database. In this case, the conf file
+        # should specify a vhost to send the reports for each cobrand, so that they don't get sent
         # more than once if there are multiple vhosts running off the same database. The email_host
         # call checks if this is the host that sends mail for this cobrand.
         next unless $cobrand->email_host;
@@ -113,12 +113,21 @@ sub send_alert_type {
             $last_problem_state = 'confirmed';
         }
 
+        # Here because report is needed by e.g. _extra_new_update_data,
+        # and the state display function
+        my $report;
+        if ($ref eq 'new_updates') {
+            # Get a report object for its photo and static map
+            $report = $schema->resultset('Problem')->find({ id => $row->{id} });
+        }
+
         # this is currently only for new_updates
         if ($row->{is_new_update}) {
             # this might throw up the odd false positive but only in cases where the
             # state has changed and there was already update text
             if ($row->{item_problem_state} && $last_problem_state ne $row->{item_problem_state}) {
-                my $state = FixMyStreet::DB->resultset("State")->display($row->{item_problem_state}, 1, $cobrand->moniker);
+                my $cobrand_name = $report->cobrand_name_for_state($cobrand);
+                my $state = FixMyStreet::DB->resultset("State")->display($row->{item_problem_state}, 1, $cobrand_name);
 
                 my $update = _('State changed to:') . ' ' . $state;
                 $row->{item_text} = $row->{item_text} ? $row->{item_text} . "\n\n" . $update :
@@ -144,8 +153,7 @@ sub send_alert_type {
 
         if (!$data{alert_user_id}) {
             if ($ref eq 'new_updates') {
-                # Get a report object for its photo and static map
-                $data{report} = $schema->resultset('Problem')->find({ id => $row->{id} });
+                $data{report} = $report;
             }
         }
 
@@ -156,7 +164,6 @@ sub send_alert_type {
         } else {
             _extra_new_area_data($row, $ref);
         }
-
         push @{$data{data}}, $row;
 
         if (!$data{alert_user_id}) {
@@ -360,6 +367,28 @@ sub _send_aggregated_alert(%) {
     } );
     $data{unsubscribe_url} = $cobrand->base_url( $data{cobrand_data} ) . '/A/' . $token->token;
 
+# Filter out alerts that have templated email responses for separate sending and send those to the problem reporter
+    my @template_data = grep { $_->{item_private_email_text } && $_->{user_id} == $_->{alert_user_id} } @{ $data{data} };
+    @{ $data{data} } = grep {! $_->{item_private_email_text } || $_->{user_id} != $_->{alert_user_id} } @{ $data{data} };
+
+    if (@template_data) {
+        my %template_data = %data;
+        $template_data{data} = [@template_data];
+        $template_data{template} = 'templated_email_alert-update';
+        trigger_alert_sending($alert_by, $token, %template_data);
+    };
+
+    if (@{ $data{data} }) {
+        trigger_alert_sending($alert_by, $token, %data);
+    }
+
+}
+
+sub trigger_alert_sending {
+    my $alert_by = shift;
+    my $token = shift;
+    my %data = @_;
+
     my $result;
     if ($alert_by eq 'phone') {
         $result = _send_aggregated_alert_phone(%data);
@@ -380,7 +409,6 @@ sub _send_aggregated_alert_email {
     my $cobrand = $data{cobrand};
 
     FixMyStreet::Map::set_map_class($cobrand);
-
     my $sender = FixMyStreet::Email::unique_verp_id([ 'alert', $data{alert_id} ], $cobrand->call_hook('verp_email_domain'));
     my $result = FixMyStreet::Email::send_cron(
         $data{schema},

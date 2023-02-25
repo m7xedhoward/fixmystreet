@@ -82,6 +82,7 @@ sub report_new : Path : Args(0) {
 
     # create the report - loading a partial if available
     $c->forward('initialize_report');
+
     $c->forward('/auth/get_csrf_token');
 
     my @shortlist = grep { /^shortlist-(add|remove)-(\d+)$/ } keys %{$c->req->params};
@@ -99,7 +100,7 @@ sub report_new : Path : Args(0) {
 
     # create a problem from the submitted details
     $c->stash->{template} = "report/new/fill_in_details.html";
-    $c->forward('setup_categories_and_bodies', [ { mix_in => 1 } ]);
+    $c->forward('setup_categories_and_bodies', [ { mix_in => 1, reporting => 1 } ]);
     $c->forward('setup_report_extra_fields');
     $c->forward('check_for_category', [ { with_group => 1 } ]);
     $c->forward('setup_report_extras');
@@ -134,6 +135,7 @@ sub report_new_ajax : Path('mobile') : Args(0) {
 
     # create the report - loading a partial if available
     $c->forward('initialize_report');
+    $c->forward('/set_app_cors_header');
 
     unless ( $c->forward('determine_location') ) {
         $c->stash->{ json_response } = { errors => 'Unable to determine location' };
@@ -141,7 +143,7 @@ sub report_new_ajax : Path('mobile') : Args(0) {
         return 1;
     }
 
-    $c->forward('setup_categories_and_bodies');
+    $c->forward('setup_categories_and_bodies', [ { reporting => 1 } ]);
     $c->forward('setup_report_extra_fields');
     $c->forward('check_for_category', []);
     $c->forward('process_report');
@@ -180,6 +182,11 @@ sub send_json_response : Private {
 sub report_form_ajax : Path('ajax') : Args(0) {
     my ( $self, $c ) = @_;
 
+    if ($c->req->params->{he_referral}) {
+        $c->stash->{he_referral} = 1;
+    };
+
+    $c->forward('/set_app_cors_header');
     $c->forward('initialize_report');
 
     # work out the location for this report and do some checks
@@ -195,9 +202,9 @@ sub report_form_ajax : Path('ajax') : Args(0) {
     $c->stash->{native_app} = !$c->get_param('w');
     my $subcategories;
     if ($c->stash->{native_app}) {
-        $c->forward('setup_categories_and_bodies');
+        $c->forward('setup_categories_and_bodies', [ { reporting => 1 } ]);
     } else {
-        $c->forward('setup_categories_and_bodies', [ { mix_in => 1 } ]);
+        $c->forward('setup_categories_and_bodies', [ { mix_in => 1, reporting => 1 } ]);
         $subcategories = $c->render_fragment( 'report/new/subcategories.html');
     }
 
@@ -229,7 +236,7 @@ sub report_form_ajax : Path('ajax') : Args(0) {
     }
 
     my $lookups;
-    my $cobrand_body = $c->cobrand->can('body') && $c->cobrand->body;
+    my $cobrand_body = $c->cobrand->body;
     foreach (@{$c->stash->{contacts}}) {
         my $category = $_->category;
         my $unresponsive = $c->stash->{unresponsive}{$category} || $c->stash->{unresponsive}{ALL};
@@ -266,6 +273,7 @@ sub report_form_ajax : Path('ajax') : Args(0) {
         $top_message ? (top_message => $top_message) : (),
         unresponsive => $c->stash->{unresponsive}->{ALL} || '',
         by_category => \%by_category,
+        $c->stash->{'preselected_categories'} ? (preselected => $c->stash->{'preselected_categories'} ) : (),
     };
     $c->forward('send_json_response');
 }
@@ -533,7 +541,9 @@ sub oauth_callback : Private {
     my ( $self, $c, $token_code ) = @_;
     my $auth_token = $c->forward(
         '/tokens/load_auth_token', [ $token_code, 'problem/social' ]);
-    $c->stash->{oauth_report} = $auth_token->data;
+    my $data = $auth_token->data;
+    $c->stash->{filter_group} = $data->{group};
+    $c->stash->{oauth_report} = $data->{report};
     $c->detach('report_new');
 }
 
@@ -742,6 +752,14 @@ sub setup_categories_and_bodies : Private {
     my $contacts = $c->model('DB::Contact')->for_new_reports($c, \%bodies);
     my @contacts = $c->cobrand->categories_restriction($contacts)->all_sorted;
 
+    # If there are multiple contacts with the same category name and one of
+    # them has prefer_if_multiple set then use that one.
+    my @preferred = grep { $_->get_extra_metadata('prefer_if_multiple') } @contacts;
+    my %preferred_ids = map { $_->id => 1 } @preferred;
+    my %preferred_cats = map { $_->category => 1 } @preferred;
+
+    @contacts = grep { !$preferred_cats{$_->category} || $preferred_ids{$_->id} } @contacts;
+
     $c->cobrand->call_hook(munge_report_new_contacts => \@contacts);
 
     # variables to populate
@@ -921,7 +939,9 @@ sub process_user : Private {
     if ( $c->user_exists ) { {
         my $user = $c->user->obj;
 
-        if ($c->stash->{contributing_as_another_user}) {
+        # WasteWorks can set a flag to treat the user as if not logged in if username differs
+        my $same_user = $user->username eq $params{username};
+        if ($c->stash->{contributing_as_another_user} || ($c->stash->{ignore_logged_in_user} && !$same_user)) {
             if ($params{username} || $params{phone}) {
                 # Act as if not logged in (and it will be auto-confirmed later on)
                 $report->user(undef);
@@ -996,8 +1016,15 @@ sub process_user : Private {
         my $user = $c->user->obj;
         $report->user( $user );
         $report->name( $user->name );
-        $c->stash->{check_name} = 1;
-        $c->stash->{login_success} = 1;
+
+        # iOS app can't send cookies, so instead sends
+        # user's email/password when making a new report.
+        # The POST request has submit_sign_in set to 2 if
+        # the name has been checked.
+        unless ( ($c->get_param('submit_sign_in')||'') eq '2' ) {
+            $c->stash->{check_name} = 1;
+            $c->stash->{login_success} = 1;
+        }
         $c->log->info($user->id . ' logged in during problem creation');
         return 1;
     }
@@ -1139,7 +1166,7 @@ sub process_report : Private {
             } else {
                 my $contact_options = {};
                 $contact_options->{do_not_send} = [ $c->get_param_list('do_not_send', 1) ];
-                my $bodies = $c->forward('contacts_to_bodies', [ $report->category, $contact_options ]);
+                my $bodies = $c->forward('contacts_to_bodies', [ $report, $contact_options ]);
                 join(',', map { $_->id } @$bodies) || '-1';
             }
         };
@@ -1198,9 +1225,20 @@ sub process_report : Private {
 }
 
 sub contacts_to_bodies : Private {
-    my ($self, $c, $category, $options) = @_;
+    my ($self, $c, $report, $options) = @_;
 
+    my $category = $report->category;
     my @contacts = grep { $_->category eq $category } @{$c->stash->{contacts}};
+
+    # If there are multiple contacts for different bodies then the default
+    # behaviour is to send to all bodies. However if a contact has the
+    # "prefer_if_multiple" checkbox checked then only send reports to that contact.
+    # This is useful for e.g. routing reports to parishes when the parent council
+    # has a contact of the same name.
+    my @preferred_contacts = grep { $_->get_extra_metadata('prefer_if_multiple') } @contacts;
+    if (scalar @preferred_contacts) {
+        @contacts = @preferred_contacts;
+    }
 
     # check that the front end has not indicated that we should not send to a
     # body. This is usually because the asset code thinks it's not near enough
@@ -1221,6 +1259,9 @@ sub contacts_to_bodies : Private {
             @contacts = ($contacts[0]);
         }
     }
+
+    $c->cobrand->call_hook(munge_contacts_to_bodies => \@contacts, $report);
+
     [ map { $_->body } @contacts ];
 }
 
@@ -1251,7 +1292,7 @@ sub set_report_extras : Private {
             push @extra, {
                 name => $field->{code},
                 description => $field->{description},
-                value => $c->get_param($param_prefix . $field->{code}) || '',
+                value => $c->get_param($param_prefix . $field->{code}) // '',
             };
         }
     }
@@ -1564,7 +1605,11 @@ sub save_user_and_report : Private {
     if ( $c->stash->{is_social_user} ) {
         my $token = $c->model("DB::Token")->create( {
             scope => 'problem/social',
-            data => { $report->get_inflated_columns },
+            data => {
+                report => { $report->get_inflated_columns },
+                # Group not stored as part of report so save
+                $c->stash->{filter_group} ? ( group => $c->stash->{filter_group} ) : (),
+            },
         } );
 
         $c->stash->{detach_to} = '/report/new/oauth_callback';
@@ -1625,6 +1670,7 @@ sub save_user_and_report : Private {
     $c->cobrand->call_hook(report_new_munge_before_insert => $report);
 
     $report->update_or_insert;
+    $c->cobrand->call_hook(report_new_munge_after_insert => $report);
 
     # tidy up
     if ( my $token = $c->stash->{partial_token} ) {
@@ -1815,32 +1861,6 @@ sub redirect_or_confirm_creation : Private {
 
 sub create_related_things : Private {
     my ( $self, $c, $problem ) = @_;
-
-    # If there is a special template, create a comment using that
-    foreach my $body (values %{$problem->bodies}) {
-        my $user = $body->comment_user or next;
-
-        my $updates = Open311::GetServiceRequestUpdates->new(
-            system_user => $user,
-            current_body => $body,
-            blank_updates_permitted => 1,
-        );
-
-        my $description = $updates->comment_text_for_request({}, $problem, 'confirmed', 'dummy', '', '');
-        next unless $description;
-
-        my $request = {
-            service_request_id => $problem->id,
-            update_id => 'auto-internal',
-            # Add a second so it is definitely later than problem confirmed timestamp,
-            # which uses current_timestamp (and thus microseconds) whilst this update
-            # is rounded down to the nearest second
-            comment_time => DateTime->now->add( seconds => 1 ),
-            status => 'open',
-            description => $description,
-        };
-        $updates->process_update($request, $problem);
-    }
 
     # And now the reporter alert
     return if $c->stash->{no_reporter_alert};

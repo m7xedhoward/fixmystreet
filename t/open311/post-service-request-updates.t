@@ -19,9 +19,10 @@ my $params = {
 my $bromley = $mech->create_body_ok(2482, 'Bromley', { %$params,
     endpoint => '//www.bromley.gov.uk/',
     send_extended_statuses => 1,
-    can_be_devolved => 1 });
-my $oxon = $mech->create_body_ok(2237, 'Oxfordshire', { %$params, id => "5" . $bromley->id });
-my $bucks = $mech->create_body_ok(2217, 'Buckinghamshire', $params);
+    can_be_devolved => 1 }, { cobrand => 'bromley' });
+my $oxon = $mech->create_body_ok(2237, 'Oxfordshire', { %$params, id => "5" . $bromley->id }, { cobrand => 'oxfordshire' });
+my $bucks = $mech->create_body_ok(163793, 'Buckinghamshire', $params, { cobrand => 'buckinghamshire' });
+my $bromley_other = $mech->create_contact_ok(body_id => $bromley->id, category => 'Other', email => "OTHER", send_method => 'Open311', endpoint => '/devolved-endpoint/');
 my $oxon_other = $mech->create_contact_ok(body_id => $oxon->id, category => 'Other', email => "OTHER");
 
 subtest 'Check Open311 params' => sub {
@@ -88,7 +89,7 @@ subtest 'Send comments' => sub {
     $c3a->discard_changes;
     is $c3a->extra, undef, 'Bucks update by owner was sent';
     $c3b->discard_changes;
-    is $c3b->extra->{cobrand_skipped_sending}, 1, 'Bucks update by other was not';
+    is $c3b->send_state, 'skipped', 'Bucks update by other was not';
     $c1->discard_changes;
     is $c1->extra->{title}, "MRS", 'Title set on Bromley update';
     $c2->discard_changes;
@@ -115,25 +116,43 @@ subtest 'Send comments' => sub {
   };
 };
 
-subtest 'Check Bexley munging' => sub {
-  FixMyStreet::override_config {
-    ALLOWED_COBRANDS => ['fixmystreet', 'bexley'],
-  }, sub {
-    my $bexley = $mech->create_body_ok(2494, 'Bexley', $params);
-    $mech->create_contact_ok(body_id => $bexley->id, category => 'Other', email => "OTHER");
-
-    my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
-    my $o = Open311->new(
-        fixmystreet_body => $bexley,
-    );
-    Open311->_inject_response('servicerequestupdates.xml', $test_res);
-    my ($p5, $c5) = p_and_c($bexley);
-    my $id = $o->post_service_request_update($c5);
-    is $id, 248, 'correct update ID returned';
-    like $o->test_req_used->content, qr/service_code=OTHER/, 'Service code included';
-  };
+subtest 'Processing things that do not need sending' => sub {
+    my ($p1) = $mech->create_problems_for_body(1, $bromley->id, 'Title', { send_method_used => 'Email', whensent => \'current_timestamp', });
+    my $c1 = c($p1);
+    my ($p2) = $mech->create_problems_for_body(1, $bromley->id, 'Title', { send_method_used => 'Other', whensent => \'current_timestamp', external_id => 1 });
+    my $c2 = c($p2);
+    $o->send;
+    $c1->discard_changes;
+    $c2->discard_changes;
+    is $c1->send_state, 'processed', 'Comment 1 marked as processed';
+    is $c2->send_state, 'processed', 'Comment 2 marked as processed';
 };
 
+for my $test (
+  ['Bexley', 'bexley', 2494],
+  ['Hackney', 'hackney', 2508],
+) {
+  my ($name, $cobrand, $body_id) = @$test;
+
+  subtest "Check $name munging" => sub {
+    FixMyStreet::override_config {
+      ALLOWED_COBRANDS => ['fixmystreet', $cobrand],
+    }, sub {
+      my $body = $mech->create_body_ok($body_id, $name, $params, { cobrand => $cobrand });
+      $mech->create_contact_ok(body_id => $body->id, category => 'Other', email => "OTHER");
+
+      my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
+      my $o = Open311->new(
+          fixmystreet_body => $body,
+      );
+      Open311->_inject_response('servicerequestupdates.xml', $test_res);
+      my ($p5, $c5) = p_and_c($body);
+      my $id = $o->post_service_request_update($c5);
+      is $id, 248, 'correct update ID returned';
+      like $o->test_req_used->content, qr/service_code=OTHER/, 'Service code included';
+    };
+  };
+}
 
 subtest 'Oxfordshire gets an ID' => sub {
   FixMyStreet::override_config {
@@ -149,7 +168,6 @@ subtest 'Oxfordshire gets an ID' => sub {
 };
 
 subtest 'Devolved contact' => sub {
-    $mech->create_contact_ok(body_id => $bromley->id, category => 'Other', email => "OTHER", send_method => 'Open311', endpoint => '/devolved-endpoint/');
     $c1->update({ send_fail_count => 0 });
     Open311->_inject_response('/devolved-endpoint/servicerequestupdates.xml', "", 500);
     $o->send;

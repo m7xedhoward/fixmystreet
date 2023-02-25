@@ -28,6 +28,7 @@ has start_date => ( is => 'ro',
     }
 );
 has end_date => ( is => 'ro', isa => Maybe[Str] );
+has role_id => ( is => 'ro', isa => Maybe[Int] );
 
 # Things needed for cobrand specific extra data or checks
 
@@ -95,6 +96,7 @@ has filename => ( is => 'rw', isa => Str, lazy => 1, default => sub {
         end_date => $self->end_date,
     );
     $where{body} = $self->body->id if $self->body;
+    $where{role} = $self->role_id if $self->role_id;
     my $host = URI->new($self->cobrand->base_url)->host;
     join '-',
         $host,
@@ -119,10 +121,13 @@ sub construct_rs_filter {
     $where{"$table_name.category"} = $self->category
         if $self->category;
 
+    my $all_states = $self->cobrand->call_hook('dashboard_export_include_all_states');
     if ( $self->state && FixMyStreet::DB::Result::Problem->fixed_states->{$self->state} ) { # Probably fixed - council
         $where{"$table_name.state"} = [ FixMyStreet::DB::Result::Problem->fixed_states() ];
     } elsif ( $self->state ) {
         $where{"$table_name.state"} = $self->state;
+    } elsif ($all_states) {
+        # Do nothing, want all states
     } else {
         $where{"$table_name.state"} = [ FixMyStreet::DB::Result::Problem->visible_states() ];
     }
@@ -132,10 +137,24 @@ sub construct_rs_filter {
         end_date => $self->end_date,
         formatter => FixMyStreet::DB->schema->storage->datetime_parser,
     );
-    $where{"$table_name.confirmed"} = $range->sql;
+    if ($all_states) {
+        # Has to use created, because unconfirmed ones won't have a confirmed timestamp
+        $where{"$table_name.created"} = $range->sql;
+    } else {
+        $where{"$table_name.confirmed"} = $range->sql;
+    }
 
-    my $rs = $self->on_updates ? $self->cobrand->updates : $self->cobrand->problems;
+    my $rs = $self->on_updates ? $self->cobrand->updates : $self->cobrand->problems_on_dashboard;
     my $objects_rs = $rs->to_body($self->body)->search( \%where );
+
+    if ($self->role_id) {
+        $objects_rs = $objects_rs->search({
+            'user_roles.role_id' => $self->role_id,
+        }, {
+            join => { contributed_by => 'user_roles' },
+        });
+    }
+
     $self->_set_objects_rs($objects_rs);
     return {
         params => \%where,
@@ -255,7 +274,7 @@ sub generate_csv {
 
     my %asked_for = map { $_ => 1 } @{$self->csv_columns};
 
-    my $children = $self->body ? $self->body->first_area_children : {};
+    my $children = $self->body ? $self->body->area_children(1) : {};
 
     my $objects = $self->objects_rs;
     while ( my $obj = $objects->next ) {
@@ -352,7 +371,7 @@ sub kick_off_process {
     foreach (qw(type category state start_date end_date)) {
         $cmd .= " --$_ " . quotemeta($self->$_) if $self->$_;
     }
-    foreach (qw(body user)) {
+    foreach (qw(body user role_id)) {
         $cmd .= " --$_ " . $self->$_->id if $self->$_;
     }
     $cmd .= " --wards " . join(',', map { quotemeta } @{$self->wards}) if @{$self->wards};

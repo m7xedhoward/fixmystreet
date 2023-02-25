@@ -26,19 +26,12 @@ Run by: <a href="http://www.openlocal.org.au/">Open Local</a>
 
 <h2>Europe</h2>
 
-<h3>France</h3>
-Site: <a href="http://www.fixmystreet.fr/">FixMyStreet.fr</a>
+<h3>Croatia</h3>
+Site: <a href="https://popravi.to">Popravi.to</a>
 <br>
-Launched: 2015
+Launched: 2021
 <br>
-Run by: <a href="http://www.fixmystreet-france.fr/">FixMyStreet-France</a>
-
-<h3>Ireland</h3>
-Site: <a href="http://fixmystreet.ie/">FixMyStreet.ie</a>
-<br>
-Launched: 2012
-<br>
-Run by: <a href="http://mygov.ie/">mygov.ie</a>
+Run by: <a href="https://codeforcroatia.org">Code for Croatia</a> and <a href="https://gong.hr">Gong</a>
 
 <h3>Kosovo</h3>
 Site: <a href="https://ndreqe.com">ndreqe.</a>
@@ -143,3 +136,17 @@ Site: <a href="http://cuida.alcala.org/">Cuida Alcalá</a>
 Launched: 2015
 <br>
 Run by: <a href="http://www.kyopol.net">La Asociación KYOPOL</a>
+
+<h3>France</h3>
+Site: <a href="http://www.fixmystreet.fr/">FixMyStreet.fr</a>
+<br>
+Launched: 2015
+<br>
+Run by: <a href="http://www.fixmystreet-france.fr/">FixMyStreet-France</a>
+
+<h3>Ireland</h3>
+Site: <a href="http://fixmystreet.ie/">FixMyStreet.ie</a>
+<br>
+Launched: 2012
+<br>
+Run by: <a href="http://mygov.ie/">mygov.ie</a>

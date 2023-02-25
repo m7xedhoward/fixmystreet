@@ -1,17 +1,21 @@
 use FixMyStreet::TestMech;
 
+use t::Mock::Tilma;
+my $tilma = t::Mock::Tilma->new;
+LWP::Protocol::PSGI->register($tilma->to_psgi_app, host => 'tilma.mysociety.org');
+
 my $mech = FixMyStreet::TestMech->new;
 
 my $user = $mech->create_user_ok('test@example.com', name => 'Test User');
 
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 
-my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council');
+my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council', {}, { cobrand => 'oxfordshire' });
 my $oxfordshirecontact = $mech->create_contact_ok( body_id => $oxfordshire->id, category => 'Potholes', email => 'potholes@example.com' );
 my $oxfordshirecontact2 = $mech->create_contact_ok( body_id => $oxfordshire->id, category => 'Flytipping', email => 'flytipping@example.com' );
 my $oxfordshireuser = $mech->create_user_ok('counciluser@example.com', name => 'Council User', from_body => $oxfordshire);
 
-my $bromley = $mech->create_body_ok(2482, 'Bromley Borough Council');
+my $bromley = $mech->create_body_ok(2482, 'Bromley Borough Council', {}, { cobrand => 'bromley' });
 my $bromleycontact = $mech->create_contact_ok( body_id => $bromley->id, category => 'Potholes', email => 'potholes@example.com' );
 my $bromleyuser = $mech->create_user_ok('bromleyuser@example.com', name => 'Council User', from_body => $bromley);
 $bromleyuser->user_body_permissions->find_or_create({
@@ -23,7 +27,7 @@ my $bromleytemplate = $bromley->response_templates->create({
     text => "This template will only appear on the Bromley cobrand.",
 });
 
-my $tfl = $mech->create_body_ok(2482, 'TfL');
+my $tfl = $mech->create_body_ok(2482, 'TfL', {}, { cobrand => 'tfl' });
 my $tflcontact = $mech->create_contact_ok( body_id => $tfl->id, category => 'Potholes', email => 'potholes@example.com' );
 my $tfluser = $mech->create_user_ok('tfluser@example.com', name => 'Council User', from_body => $tfl);
 $tfluser->user_body_permissions->find_or_create({
@@ -181,7 +185,6 @@ subtest "auto-response templates that duplicate all categories can't be added" =
         text => "Thank you for your report. This problem has been fixed.",
         auto_response => 'on',
         state => 'fixed - council',
-        "contacts[".$oxfordshirecontact->id."]" => 1,
     };
     $mech->submit_form_ok( { with_fields => $fields } );
     is $mech->uri->path, '/admin/templates/' . $oxfordshire->id . '/new', 'not redirected';
@@ -192,7 +195,35 @@ subtest "auto-response templates that duplicate all categories can't be added" =
     is $oxfordshire->response_templates->count, 1, "Duplicate response template wasn't added";
 };
 
-subtest "all-category auto-response templates that duplicate a single category can't be added" => sub {
+subtest "auto-response templates for a particular category with existing all categories can be added" => sub {
+    $mech->delete_response_template($_) for $oxfordshire->response_templates;
+    $oxfordshire->response_templates->create({
+        title => "Report investigating - all cats",
+        text => "Thank you for your report. This problem has been fixed.",
+        auto_response => 1,
+        state => 'fixed - council',
+    });
+    is $oxfordshire->response_templates->count, 1, "Initial response template was created";
+
+
+    $mech->log_in_ok( $superuser->email );
+    $mech->get_ok( "/admin/templates/" . $oxfordshire->id . "/new" );
+
+    # There's already a response template for all categories and this state, so
+    # this new template won't be allowed.
+    my $fields = {
+        title => "Report investigating - single cat",
+        text => "Thank you for your report. This problem has been fixed.",
+        auto_response => 'on',
+        state => 'fixed - council',
+        "contacts[".$oxfordshirecontact->id."]" => 1,
+    };
+    $mech->submit_form_ok( { with_fields => $fields } );
+
+    is $oxfordshire->response_templates->count, 2, "Duplicate response template wasn't added";
+};
+
+subtest "all-category auto-response templates that duplicate a single category can be added" => sub {
     $mech->delete_response_template($_) for $oxfordshire->response_templates;
     my $template = $oxfordshire->response_templates->create({
         title => "Report fixed - potholes",
@@ -210,7 +241,7 @@ subtest "all-category auto-response templates that duplicate a single category c
     $mech->get_ok( "/admin/templates/" . $oxfordshire->id . "/new" );
 
     # This response template is implicitly for all categories, but there's
-    # already a template for a specific category in this state, so it won't be
+    # already a template for a specific category in this state, so it will be
     # allowed.
     my $fields = {
         title => "Report marked fixed - all cats",
@@ -219,11 +250,8 @@ subtest "all-category auto-response templates that duplicate a single category c
         state => 'fixed - council',
     };
     $mech->submit_form_ok( { with_fields => $fields } );
-    is $mech->uri->path, '/admin/templates/' . $oxfordshire->id . '/new', 'not redirected';
-    $mech->content_contains( 'Please correct the errors below' );
-    $mech->content_contains( 'There is already an auto-response template for this category/state.' );
 
-    is $oxfordshire->response_templates->count, 1, "Duplicate response template wasn't added";
+    is $oxfordshire->response_templates->count, 2, "Duplicate response template wasn't added";
 };
 
 subtest "auto-response templates that duplicate external_status_code can't be added" => sub {
@@ -247,6 +275,7 @@ subtest "auto-response templates that duplicate external_status_code can't be ad
         text => "Thank you for your report. This problem has been fixed.",
         auto_response => 'on',
         external_status_code => '100',
+        "contacts[".$oxfordshirecontact->id."]" => 1,
     };
     $mech->submit_form_ok( { with_fields => $fields } );
     is $mech->uri->path, '/admin/templates/' . $oxfordshire->id . '/new', 'not redirected';
@@ -254,6 +283,33 @@ subtest "auto-response templates that duplicate external_status_code can't be ad
     $mech->content_contains( 'There is already an auto-response template for this category/state.' );
 
     is $oxfordshire->response_templates->count, 1, "Duplicate response template wasn't added";
+};
+
+subtest "any-category auto-response templates that duplicate external_status_code can be added" => sub {
+    $mech->delete_response_template($_) for $oxfordshire->response_templates;
+    my $template = $oxfordshire->response_templates->create({
+        title => "Report fixed - potholes",
+        text => "Thank you for your report. This problem has been fixed.",
+        auto_response => 1,
+        external_status_code => '100',
+    });
+    $template->contact_response_templates->find_or_create({
+        contact_id => $oxfordshirecontact->id,
+    });
+    is $oxfordshire->response_templates->count, 1, "Initial response template was created";
+
+    $mech->log_in_ok( $superuser->email );
+    $mech->get_ok( "/admin/templates/" . $oxfordshire->id . "/new" );
+
+    my $fields = {
+        title => "Report marked fixed - all cats",
+        text => "Thank you for your report. This problem has been fixed.",
+        auto_response => 'on',
+        external_status_code => '100',
+    };
+    $mech->submit_form_ok( { with_fields => $fields } );
+
+    is $oxfordshire->response_templates->count, 2, "Duplicate response template wasn't added";
 };
 
 subtest "templates that set state and external_status_code can't be added" => sub {
@@ -276,14 +332,32 @@ subtest "templates that set state and external_status_code can't be added" => su
     is $oxfordshire->response_templates->count, 0, "Invalid response template wasn't added";
 };
 
+subtest "templates that set private email text but not public text can't be added" => sub {
+    $mech->delete_response_template($_) for $oxfordshire->response_templates;
+    $mech->log_in_ok( $superuser->email );
+    $mech->get_ok( "/admin/templates/" . $oxfordshire->id . "/new" );
+
+    my $fields = {
+        title => "Report marked fixed - all cats",
+        text => "",
+        email => "Thank you for your report. This problems has been fixed.",
+        auto_response => 'on',
+        state => 'fixed - council',
+        external_status_code => '100',
+    };
+    $mech->submit_form_ok( { with_fields => $fields } );
+    is $mech->uri->path, '/admin/templates/' . $oxfordshire->id . '/new', 'not redirected';
+    $mech->content_contains( 'Please correct the errors below' );
+    $mech->content_contains( 'There must be template text if there is alternative email text.' );
+
+    is $oxfordshire->response_templates->count, 0, "Invalid response template wasn't added";
+};
+
 subtest "category groups are shown" => sub {
     FixMyStreet::override_config {
         ALLOWED_COBRANDS => [ 'oxfordshire' ],
         COBRAND_FEATURES => {
             category_groups => {
-                oxfordshire => 1,
-            },
-            multiple_category_groups => {
                 oxfordshire => 1,
             },
         },
@@ -328,7 +402,10 @@ subtest "category groups are shown" => sub {
 subtest "TfL cobrand only shows TfL templates" => sub {
     FixMyStreet::override_config {
         ALLOWED_COBRANDS => [ 'tfl' ],
-        COBRAND_FEATURES => { internal_ips => { tfl => [ '127.0.0.1' ] } },
+        COBRAND_FEATURES => {
+            internal_ips => { tfl => [ '127.0.0.1' ] },
+            anonymous_account => { tfl => 'anon' },
+        },
     }, sub {
         $report->update({
             category => $tflcontact->category,

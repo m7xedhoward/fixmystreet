@@ -298,7 +298,10 @@ sub oidc_callback: Path('/auth/OIDC') : Args(0) {
         $c->detach('/page_error_500_internal_error', [ $message ]);
     }
 
-    $c->detach('oauth_failure') unless $id_token;
+    if (!$id_token) {
+        $c->log->info("Social::oidc_callback no id_token: " . $oidc->{last_response}->{_content});
+        $c->detach('oauth_failure');
+    }
 
     # sanity check the token audience is us...
     unless ($id_token->payload->{aud} eq $c->cobrand->feature('oidc_login')->{client_id}) {
@@ -320,15 +323,9 @@ sub oidc_callback: Path('/auth/OIDC') : Args(0) {
         $c->detach('oauth_failure') unless $allowed_domains{$hd};
     }
 
-    # Some claims need parsing into a friendlier format
-    my $name = $id_token->payload->{name} || join(" ", $id_token->payload->{given_name}, $id_token->payload->{family_name});
-    my $email = $id_token->payload->{email};
-
-    # WCC Azure provides a single email address as an array for some reason
-    my $emails = $id_token->payload->{emails};
-    if ($emails && @$emails) {
-        $email = $emails->[0];
-    }
+    # Cobrands can use different fields for name and email
+    my ($name, $email) = $c->cobrand->call_hook(user_from_oidc => $id_token->payload);
+    $name = '' if $name && $name !~ /\w/;
 
     # There's a chance that a user may have multiple OIDC logins, so build a namespaced uid to prevent collisions
     my $uid = join(":", $c->cobrand->moniker, $c->cobrand->feature('oidc_login')->{client_id}, $id_token->payload->{sub});
@@ -387,7 +384,7 @@ sub oauth_success : Private {
         } elsif ( $type eq 'oidc' ) {
             $user->add_oidc_id($uid);
         }
-        $user->name($name);
+        $user->name($name) if $name;
         if ($extra) {
             $user->extra({
                 %{ $user->get_extra() },
@@ -406,7 +403,7 @@ sub oauth_success : Private {
         }
         if ($user) {
             # Matching ID in our database
-            $user->name($name);
+            $user->name($name) if $name;
             if ($extra) {
                 $user->extra({
                     %{ $user->get_extra() },
@@ -417,7 +414,7 @@ sub oauth_success : Private {
         } else {
             # No matching ID, store ID for use later
             $c->session->{oauth}{$type . '_id'} = $uid;
-            $c->session->{oauth}{name} = $name;
+            $c->session->{oauth}{name} = $name if $name;
             $c->session->{oauth}{extra} = $extra;
             $c->stash->{oauth_need_email} = 1;
         }

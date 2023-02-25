@@ -16,8 +16,12 @@ use FixMyStreet::Script::Reports;
 use FixMyStreet::TestMech;
 my $mech = FixMyStreet::TestMech->new;
 
+use t::Mock::Tilma;
+my $tilma = t::Mock::Tilma->new;
+LWP::Protocol::PSGI->register($tilma->to_psgi_app, host => 'tilma.mysociety.org');
+
 my $user = $mech->create_user_ok( 'eh@example.com' );
-my $body = $mech->create_body_ok( 2342, 'East Hertfordshire Council');
+my $body = $mech->create_body_ok( 2342, 'East Hertfordshire Council', {}, { cobrand => 'eastherts' });
 my $contact = $mech->create_contact_ok( body_id => $body->id, category => 'Potholes', email => 'POT' );
 $contact->set_extra_fields(
     { code => 'easting', datatype => 'number' },
@@ -151,7 +155,7 @@ subtest 'test handles bad category', sub {
     like $bad_category_report->send_fail_reason, qr/Category Flytipping does not exist for body/, 'failure message set';
 };
 
-my $hounslow = $mech->create_body_ok( 2483, 'Hounslow Borough Council');
+my $hounslow = $mech->create_body_ok( 2483, 'Hounslow Borough Council', {}, { cobrand => 'hounslow' });
 my $contact2 = $mech->create_contact_ok( body_id => $hounslow->id, category => 'Graffiti', email => 'GRAF' );
 $contact2->set_extra_fields(
     { code => 'easting', datatype => 'number' },

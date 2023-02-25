@@ -6,7 +6,7 @@ my $user = $mech->create_user_ok('test@example.com', name => 'Test User');
 my $user2 = $mech->create_user_ok('test2@example.com', name => 'Test User 2');
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 
-my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council');
+my $oxfordshire = $mech->create_body_ok(2237, 'Oxfordshire County Council', {}, { cobrand => 'oxfordshire' });
 my $oxfordshireuser = $mech->create_user_ok('counciluser@example.com', name => 'Council User', from_body => $oxfordshire);
 
 my $bromley = $mech->create_body_ok(2482, 'Bromley Council');
@@ -127,7 +127,6 @@ FixMyStreet::override_config {
             email => $user2->email,
             body => $user2->from_body->id,
             phone => '',
-            flagged => undef,
         } } );
         $user2->discard_changes;
         is $user2->name, 'Test Updated User 2', 'name changed';
@@ -149,7 +148,6 @@ FixMyStreet::override_config {
             email => $user2->email,
             body => $user2->from_body->id,
             phone => '',
-            flagged => undef,
             "permissions[moderate]" => 'on',
             "permissions[report_edit_category]" => undef,
             "permissions[report_edit_priority]" => undef,
@@ -183,7 +181,6 @@ FixMyStreet::override_config {
             email => $user2->email,
             body => undef,
             phone => '',
-            flagged => undef,
             "permissions[moderate]" => 'on', # NB tick box is left on deliberately
             "permissions[report_edit_category]" => undef,
             "permissions[report_edit_priority]" => undef,

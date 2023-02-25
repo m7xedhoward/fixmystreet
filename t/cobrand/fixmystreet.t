@@ -15,8 +15,8 @@ my $mech = FixMyStreet::TestMech->new;
 my $resolver = Test::MockModule->new('Email::Valid');
 $resolver->mock('address', sub { $_[1] });
 
-my $body = $mech->create_body_ok( 2514, 'Birmingham' );
-$mech->create_body_ok( 2482, 'Bromley' );
+my $body = $mech->create_body_ok( 2514, 'Birmingham', {}, { cobrand => 'birmingham' } );
+$mech->create_body_ok( 2482, 'Bromley', {}, { cobrand => 'bromley' });
 
 my $contact = $mech->create_contact_ok(
     body_id => $body->id,
@@ -233,8 +233,8 @@ FixMyStreet::override_config {
         );
 
         my ($report) = $mech->create_problems_for_body(1, $body->id, 'Title', {
-            latitude => 52.236251,
-            longitude => -0.892052,
+            latitude => 52.236252,
+            longitude => -0.892053,
             cobrand => 'fixmystreet',
             category => 'Graffiti',
         });
@@ -352,7 +352,102 @@ FixMyStreet::override_config {
         $mech->get_ok('/about/privacy');
         $mech->content_contains('<strong>Privacy and cookies</strong>');
         $mech->content_lacks('<a href="/privacy">Privacy and cookies</a>');
+	};
+};
+
+FixMyStreet::override_config {
+    ALLOWED_COBRANDS => 'fixmystreet',
+    MAPIT_URL => 'http://mapit.uk/',
+}, sub {
+    my $hampshire = $mech->create_body_ok(2227, 'Hampshire County Council');
+    my $he = $mech->create_body_ok(2227, 'National Highways');
+    $mech->create_contact_ok(body_id => $hampshire->id, category => 'Flytipping', email => 'foo@bexley');
+    $mech->create_contact_ok(body_id => $hampshire->id, category => 'Trees', email => 'foo@bexley');
+    $mech->create_contact_ok(body_id => $he->id, category => 'Litter (NH)', email => 'litter@he', group => 'National Highways');
+    $mech->create_contact_ok(body_id => $he->id, category => 'Potholes (NH)', email => 'potholes@he', group => 'National Highways');
+
+    subtest 'fixmystreet changes litter options for National Highways' => sub {
+
+        our $he_mod = Test::MockModule->new('FixMyStreet::Cobrand::UKCouncils');
+        sub mock_road {
+            my ($name, $litter) = @_;
+            $he_mod->mock('_fetch_features', sub {
+                my ($self, $cfg, $x, $y) = @_;
+                my $road = {
+                    properties => { area_name => 'Area 1', ROA_NUMBER => $name, sect_label => "$name/111" },
+                    geometry => {
+                        type => 'LineString',
+                        coordinates => [ [ $x-2, $y+2 ], [ $x+2, $y+2 ] ],
+                    }
+                };
+                if ($cfg->{typename} eq 'highways_litter_pick') {
+                    return $litter ? [$road] : [];
+                }
+                return [$road];
+            });
+        }
+
+        # Motorway, NH responsible for litter (but not in dataset), council categories will also be present
+        mock_road("M1", 0);
+        $mech->get_ok("/report/new?longitude=-0.912160&latitude=51.015143");
+        $mech->content_contains('Litter');
+        $mech->content_contains('Potholes');
+        $mech->content_contains('Trees');
+        $mech->content_contains('Flytipping');
+
+        # A-road where NH responsible for litter, council categories will also be present
+        mock_road("A5103", 1);
+        $mech->get_ok("/report/new?longitude=-0.912160&latitude=51.015143");
+        $mech->content_contains('Litter');
+        $mech->content_contains('Potholes');
+        $mech->content_contains('Trees');
+        $mech->content_contains('Flytipping');
+
+        # A-road where NH not responsible for litter, no NH litter categories
+        mock_road("A34", 0);
+        $mech->get_ok("/report/new?longitude=-0.912160&latitude=51.015143");
+        $mech->content_lacks('Litter');
+        $mech->content_contains('Potholes');
+        $mech->content_contains('Trees');
+        $mech->content_contains('Flytipping');
+
+        # A-road where NH not responsible for litter, referred to FMS from National Highways
+        # ajax call filters NH category to contain only litter related council subcategories
+        mock_road("A34", 0);
+        my $j = $mech->get_ok_json("/report/new/ajax?w=1&longitude=-0.912160&latitude=51.015143&he_referral=1");
+        my $tree = HTML::TreeBuilder->new_from_content($j->{subcategories});
+        my @elements = $tree->find('input');
+        is @elements, 1, 'Only one subcategory in National Highways category';
+        is $elements[0]->attr('value') eq 'Flytipping', 1, 'Subcategory is Flytipping';
     };
+
+    subtest "check things redacted appropriately" => sub {
+        $mech->get_ok("/report/new?longitude=-0.912160&latitude=51.015143");
+        my $title = "Test Redact report from 07000 000000";
+        my $detail = 'Please could you email me on test@example.org or ring me on (01234) 567 890.';
+        $mech->submit_form_ok({
+            with_fields => {
+                title => $title,
+                detail => $detail,
+                category => 'Potholes (NH)',
+                name => 'Test Example',
+                username_register => 'test@example.org',
+            }
+        }, "submit details");
+        $mech->content_contains('Nearly done');
+
+        my $report = FixMyStreet::DB->resultset("Problem")->search(undef, { order_by => { -desc => 'id' } })->first;
+        is $report->title, 'Test Redact report from [phone removed]';
+        is $report->detail, 'Please could you email me on [email removed] or ring me on [phone removed].';
+
+        my ($history) = $report->moderation_history;
+        is $history->title, $title;
+        is $history->detail, $detail;
+
+        $report->delete;
+    };
+
+
 };
 
 done_testing();

@@ -10,12 +10,20 @@ my $body = $mech->create_body_ok( 2493, 'Royal Borough of Greenwich', {
     endpoint => 'endpoint',
     api_key => 'key',
     jurisdiction => 'greenwich',
+}, {
+    cobrand => 'greenwich',
 });
 
 my $contact = $mech->create_contact_ok(
     body_id => $body->id,
     category => 'Pothole',
     email => 'HOLE',
+);
+my $contact_old = $mech->create_contact_ok(
+    body_id => $body->id,
+    category => 'Something Old',
+    email => 'OLD',
+    endpoint => 'https://open311.royalgreenwich.gov.uk/',
 );
 
 my $user = $mech->create_user_ok( 'greenwich@example.com' );
@@ -25,6 +33,20 @@ my @reports = $mech->create_problems_for_body( 1, $body->id, 'Test', {
     user => $user,
 });
 my $report = $reports[0];
+$report->geocode({
+    resourceSets => [ {
+        resources => [ {
+            name => 'Constitution Hill',
+            address => {
+                addressLine => 'Constitution Hill',
+                locality => 'London',
+                'formattedAddress' => 'Constitution Hill, London',
+            }
+        } ],
+    } ],
+});
+$report->update;
+
 
 subtest 'check services override' => sub {
     my $processor = Open311::PopulateServiceList->new();
@@ -106,6 +128,17 @@ subtest 'testing special Open311 behaviour', sub {
     my $c = CGI::Simple->new($req->content);
     is $c->param('attribute[external_id]'), $report->id, 'Request had correct ID';
     is $c->param('attribute[easting]'), 529025, 'Request had correct easting';
+    is $c->param('attribute[closest_address]'), 'Constitution Hill, London', 'Request had correct closest address';
+};
+
+subtest 'Old server cutoff' => sub {
+    my ($report1) = $mech->create_problems_for_body(1, $body->id, 'Test Problem 1', { category => 'Pothole' });
+    my ($report2) = $mech->create_problems_for_body(1, $body->id, 'Test Problem 2', { category => 'Something Old' });
+    my $update1 = $mech->create_comment_for_problem($report1, $user, 'Anonymous User', 'Update text', 't', 'confirmed', undef);
+    my $update2 = $mech->create_comment_for_problem($report2, $user, 'Anonymous User', 'Update text', 't', 'confirmed', undef);
+    my $cobrand = FixMyStreet::Cobrand::Greenwich->new;
+    is $cobrand->should_skip_sending_update($update1), 0;
+    is $cobrand->should_skip_sending_update($update2), 1;
 };
 
 subtest 'RSS feed on .com' => sub {

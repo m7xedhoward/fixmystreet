@@ -7,6 +7,7 @@ use FixMyStreet;
 use FixMyStreet::DB;
 use FixMyStreet::Geocode::Address;
 use FixMyStreet::Geocode::Bing;
+use FixMyStreet::OutOfHours;
 use DateTime;
 use List::MoreUtils 'none';
 use URI;
@@ -72,7 +73,7 @@ sub feature {
     my $features = FixMyStreet->config('COBRAND_FEATURES');
     return unless $features && ref $features eq 'HASH';
     return unless $features->{$feature} && ref $features->{$feature} eq 'HASH';
-    return $features->{$feature}->{$self->moniker};
+    return $features->{$feature}->{$self->moniker} || $features->{$feature}->{_fallback};
 }
 
 sub csp_config {
@@ -133,6 +134,18 @@ restricted to a subset if we're on a cobrand that only wants some of the data.
 sub problems_on_map {
     my $self = shift;
     return $self->problems_on_map_restriction(FixMyStreet::DB->resultset('Problem'));
+}
+
+=item problems_on_dashboard
+
+Returns a ResultSet of Problems to be shown on the /dashboard.
+Defaults to the same as problems.
+
+=cut
+
+sub problems_on_dashboard {
+    my $self = shift;
+    return $self->problems;
 }
 
 =item updates
@@ -431,24 +444,6 @@ Returns any disambiguating information available. Defaults to none.
 
 sub disambiguate_location { FixMyStreet->config('GEOCODING_DISAMBIGUATION') or {}; }
 
-=item cobrand_data_for_generic_update
-
-Parameter is UPDATE_DATA, a reference to a hash of non-cobranded update data.
-Return cobrand extra data for the update
-
-=cut
-
-sub cobrand_data_for_generic_update { '' }
-
-=item cobrand_data_for_generic_update
-
-Parameter is PROBLEM_DATA, a reference to a hash of non-cobranded problem data.
-Return cobrand extra data for the problem
-
-=cut
-
-sub cobrand_data_for_generic_problem { '' }
-
 =item header_params
 
 Return any params to be added to responses
@@ -539,9 +534,9 @@ if the report's category has its "updates_disallowed" flag set.
 
 sub updates_disallowed {
     my ($self, $problem) = @_;
-    return 1 if $problem->get_extra_metadata('closed_updates');
-    return 1 if $problem->contact && $problem->contact->get_extra_metadata('updates_disallowed');
-    return 0;
+    return 'problem-closed' if $problem->get_extra_metadata('closed_updates');
+    return 'category-closed' if $problem->contact && $problem->contact->get_extra_metadata('updates_disallowed');
+    return '';
 }
 
 =item reopening_disallowed
@@ -745,6 +740,9 @@ sub admin_pages {
     if ( $user->has_body_permission_to('emergency_message_edit') ) {
         $pages->{emergencymessage} = [ _('Emergency message'), 12 ];
     }
+    if ( $user->has_body_permission_to('wasteworks_config') ) {
+        $pages->{waste} = [ _('WasteWorks config'), 14];
+    }
 
     return $pages;
 }
@@ -828,11 +826,21 @@ cobrand's area_types_children type.
 =cut
 
 sub fetch_area_children {
-    my ($self, $area_id) = @_;
+    my ($self, $area_ids, $all_generations) = @_;
 
-    return FixMyStreet::MapIt::call('area/children', $area_id,
-        type => $self->area_types_children
-    );
+    $area_ids = [ $area_ids ] unless ref $area_ids eq 'ARRAY';
+
+    my %all_children;
+
+    foreach my $area_id (@$area_ids) {
+        my $children = FixMyStreet::MapIt::call('area/children', $area_id,
+            type => $self->area_types_children,
+            $all_generations ? (min_generation => 1) : (),
+        );
+        %all_children = ( %all_children, %$children );
+    }
+
+    return \%all_children;
 }
 
 =item contact_name, contact_email, do_not_reply_email
@@ -991,6 +999,15 @@ sub _fallback_body_sender {
 
     return { method => 'Email', contact => $contact };
 };
+
+sub body {
+    my $self = shift;
+
+    my $cobrand = $self->moniker;
+    return FixMyStreet::DB->resultset("Body")->find({
+        extra => { like => '%T7:cobrand,T' . length($cobrand) . ':' . $cobrand . '%'},
+    })
+}
 
 sub example_places {
     # uncoverable branch true
@@ -1153,7 +1170,7 @@ sub allow_anonymous_reports {
     return 0 unless $category_name;
 
     return $lookup->{$category_name} if defined $lookup->{$category_name};
-    if ( $self->can('body') and $self->body ) {
+    if ( $self->body ) {
         my $category_rs = FixMyStreet::DB->resultset("Contact")->search({
             body_id => $self->body->id,
             category => $category_name
@@ -1371,12 +1388,24 @@ Emergency message, if one has been set in the admin.
 sub emergency_message {
     my $self = shift;
     my $type = shift;
-    return unless $self->can('body');
     my $body = $self->body;
     return unless $body;
     my $field = 'emergency_message';
     $field .= "_$type" if $type;
-    FixMyStreet::Template::SafeString->new($body->get_extra_metadata($field));
+
+    my $msg = $body->get_extra_metadata($field);
+    my $ooh_msg = $body->get_extra_metadata($field . '_ooh');
+    if ($ooh_msg) {
+        my $ooh = $self->ooh_times($body);
+        $msg = $ooh_msg if $ooh->active;
+    }
+    FixMyStreet::Template::SafeString->new($msg) if $msg;
+}
+
+sub ooh_times {
+    my ($self, $body) = @_;
+    my $times = $body->get_extra_metadata("ooh_times");
+    return FixMyStreet::OutOfHours->new(times => $times);
 }
 
 # Report if cobrand denies updates by user

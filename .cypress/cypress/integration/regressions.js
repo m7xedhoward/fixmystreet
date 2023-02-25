@@ -28,13 +28,11 @@ describe('Regression tests', function() {
     it('Does not escape HTML entities in the title', function() {
         cy.server();
         cy.route('/around\?ajax*').as('update-results');
-        cy.request({
-          method: 'POST',
-          url: '/auth?r=/',
-          form: true,
-          body: { username: 'cs@example.org', password_sign_in: 'password' }
-        });
-        cy.visit('/report/1/moderate');
+        cy.visit('/auth?r=report/1/moderate');
+        cy.get('[name=username]').type('cs@example.org');
+        cy.contains('Sign in with a password').click();
+        cy.get('[name=password_sign_in]').type('password');
+        cy.get('[name=sign_in_by_password]').last().click();
         cy.get('[name=problem_title]').clear().type('M&S "brill" says <glob>').parents('form').submit();
         cy.title().should('contain', 'M&S "brill" says <glob>');
         cy.contains('Problems nearby').click();
@@ -66,11 +64,11 @@ describe('Regression tests', function() {
       cy.get('#map_box').click();
       cy.wait('@report-ajax');
       cy.pickCategory('Graffiti');
-      cy.contains(/These will be sent to Northampton Borough Council and also/);
+      cy.contains(/These will be sent to West Northamptonshire Council and also/);
 
       cy.get('#map_box').click(200, 200);
       cy.wait('@report-ajax');
-      cy.contains(/These will be sent to Northampton Borough Council and also/);
+      cy.contains(/These will be sent to West Northamptonshire Council and also/);
     });
 
     it('remembers extra fields when you sign in during reporting', function() {
@@ -81,7 +79,7 @@ describe('Regression tests', function() {
       cy.wait('@report-ajax');
       cy.pickCategory('Licensing');
       cy.nextPageReporting();
-      cy.get('#subcategory_Licensing label').contains('Skips').click();
+      cy.pickSubcategory('Licensing', 'Skips');
       cy.nextPageReporting();
       cy.get('[name=start_date').type('2019-01-01');
       cy.nextPageReporting();

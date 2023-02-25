@@ -98,14 +98,20 @@ sub edit : Path : Args(2) {
                 $c->stash->{errors}->{title} = _("There is already a template with that title.");
             }
 
+            if ($c->get_param('email') && !$c->get_param('text') ) {
+                $c->stash->{errors}->{email_text} = _("There must be template text if there is alternative email text.");
+            };
             $template->text( $c->get_param('text') );
+            $template->email_text( $c->get_param('email') || '');
+
             $template->state( $c->get_param('state') );
 
             my $ext_code = $c->cobrand->call_hook('admin_templates_external_status_code_hook');
             $ext_code ||= $c->get_param('external_status_code');
             $template->external_status_code($ext_code);
 
-            if ( $template->state && $template->external_status_code ) {
+            # Bucks can set both state and external state for the special 'email-in' templates
+            if ( $template->state && $template->external_status_code && $c->cobrand->moniker ne 'buckinghamshire' ) {
                 $c->stash->{errors} ||= {};
                 $c->stash->{errors}->{state} = _("State and external status code cannot be used simultaneously.");
                 $c->stash->{errors}->{external_status_code} = _("State and external status code cannot be used simultaneously.");
@@ -115,14 +121,14 @@ sub edit : Path : Args(2) {
             if ($template->auto_response) {
                 my @check_contact_ids = @new_contact_ids;
                 # If the new template has not specific categories (i.e. it
-                # applies to all categories) then we need to check each of those
-                # category ids for existing auto-response templates.
+                # applies to all categories) then we only need to check for
+                # other any-category auto-response templates.
                 if (!scalar @check_contact_ids) {
-                    @check_contact_ids = @live_contact_ids;
+                    @check_contact_ids = (undef);
                 }
                 my $query = {
                     'auto_response' => 1,
-                    'contact.id' => [ @check_contact_ids, undef ],
+                    'contact.id' => [ @check_contact_ids ],
                     -or => {
                         $template->state ? ('me.state' => $template->state) : (),
                         $template->external_status_code ? ('me.external_status_code' => $template->external_status_code) : (),

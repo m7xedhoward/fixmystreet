@@ -59,9 +59,8 @@ __PACKAGE__->add_columns(
   "created",
   {
     data_type     => "timestamp",
-    default_value => \"current_timestamp",
+    default_value => \"CURRENT_TIMESTAMP",
     is_nullable   => 0,
-    original      => { default_value => \"now()" },
   },
   "confirmed",
   { data_type => "timestamp", is_nullable => 1 },
@@ -78,9 +77,8 @@ __PACKAGE__->add_columns(
   "lastupdate",
   {
     data_type     => "timestamp",
-    default_value => \"current_timestamp",
+    default_value => \"CURRENT_TIMESTAMP",
     is_nullable   => 0,
-    original      => { default_value => \"now()" },
   },
   "whensent",
   { data_type => "timestamp", is_nullable => 1 },
@@ -114,6 +112,12 @@ __PACKAGE__->add_columns(
   { data_type => "text", is_nullable => 1 },
   "defect_type_id",
   { data_type => "integer", is_foreign_key => 1, is_nullable => 1 },
+  "send_fail_body_ids",
+  {
+    data_type     => "integer[]",
+    default_value => \"'{}'::integer[]",
+    is_nullable   => 0,
+  },
 );
 __PACKAGE__->set_primary_key("id");
 __PACKAGE__->has_many(
@@ -170,8 +174,8 @@ __PACKAGE__->has_many(
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2019-04-25 12:06:39
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:hUXle+TtlkDkxkBrVa/u+g
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2022-03-10 11:09:46
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:W+bK8MqpeFwkTj0Ze/tN0g
 
 # Add fake relationship to stored procedure table
 __PACKAGE__->has_one(
@@ -214,6 +218,44 @@ __PACKAGE__->belongs_to(
   },
 );
 
+# Add a possible join for the Contact objects associated with this report
+# (based on bodies_str and category). Returns all contacts.
+__PACKAGE__->has_many(
+  contacts => "FixMyStreet::DB::Result::Contact",
+  sub {
+    my $args = shift;
+    return {
+        "$args->{foreign_alias}.category" => { -ident => "$args->{self_alias}.category" },
+        -and => [
+            \[ "CAST($args->{foreign_alias}.body_id AS text) = ANY(regexp_split_to_array($args->{self_alias}.bodies_str, ','))" ],
+        ]
+    };
+  },
+  {
+    cascade_copy => 0,
+    cascade_delete => 0,
+    join_type => "LEFT",
+  },
+);
+
+__PACKAGE__->might_have(
+  contributed_by => "FixMyStreet::DB::Result::User",
+  sub {
+    my $args = shift;
+    return {
+        "$args->{self_alias}.extra" => { like => '%contributed_by%' }, # makes it more performant(!)
+        -and => [
+            \[ "substring($args->{self_alias}.extra from 'T14:contributed_by,I\\d+:(\\d+)')::integer = $args->{foreign_alias}.id" ],
+        ]
+    };
+  },
+  {
+    join_type => "LEFT",
+    on_delete => "NO ACTION",
+    on_update => "NO ACTION",
+  },
+);
+
 __PACKAGE__->load_components("+FixMyStreet::DB::RABXColumn");
 __PACKAGE__->rabx_column('extra');
 __PACKAGE__->rabx_column('geocode');
@@ -224,6 +266,7 @@ use Utils;
 use FixMyStreet::Map::FMS;
 use FixMyStreet::Template;
 use FixMyStreet::Template::SafeString;
+use List::Util qw/any uniq/;
 use LWP::Simple qw($ua);
 use RABX;
 use URI;
@@ -234,6 +277,8 @@ my $IM = eval {
     Image::Magick->import;
     1;
 };
+
+use constant SENDER_REGEX => qr/^.*::/;
 
 with 'FixMyStreet::Roles::Abuser',
      'FixMyStreet::Roles::Extra',
@@ -347,6 +392,29 @@ sub visible_states_remove {
     my ($self, @states) = @_;
     for my $state (@states) {
         $hidden_states->{$state} = 1;
+    }
+}
+
+sub public_asset_id {
+    my $self = shift;
+
+    my $current_cobrand = $self->result_source->schema->cobrand;
+
+    my $cobrand_for_problem = $current_cobrand->call_hook(
+        get_body_handler_for_problem => $self );
+
+    return unless $cobrand_for_problem;
+
+    # Should be of the form:
+    # COBRAND_FEATURES:
+    #     public_asset_ids:
+    #         oxfordshire: ['feature_id', 'unit_number']
+    my $asset_id_labels = $cobrand_for_problem->feature('public_asset_ids');
+
+    # Return the first match
+    for my $label (@$asset_id_labels) {
+        my $asset_id = $self->get_extra_field_value($label);
+        return $asset_id if $asset_id;
     }
 }
 
@@ -640,7 +708,10 @@ sub meta_line {
     my $category = $problem->category_display;
     $category = $cobrand->call_hook(change_category_text => $category) || $category;
 
-    if ( $problem->anonymous ) {
+    # Call a hook on the cobrand to check if the problem should be treated as anonymous
+    my $anonymous = $cobrand->call_hook('is_problem_anonymous');
+
+    if ( $problem->anonymous || $anonymous ) {
         if ( $problem->service and $category && $category ne _('Other') ) {
             $meta =
             sprintf( _('Reported via %s in the %s category anonymously at %s'),
@@ -687,11 +758,13 @@ sub nearest_address {
     my $self = shift;
 
     return '' unless $self->geocode;
+    return '' if $self->cobrand_data && $self->cobrand_data eq 'waste';
 
     my $address = $self->geocode->{resourceSets}[0]{resources}[0];
     return $address->{name};
 }
 
+# Does not return bodies whose send methods have failed
 sub body {
     my ( $problem, $link ) = @_;
     my $body;
@@ -703,7 +776,12 @@ sub body {
             $body = FixMyStreet::Template::html_filter($problem->external_body);
         }
     } else {
-        my $bodies = $problem->bodies;
+        my %bodies = %{$problem->bodies};
+
+        # We only want bodies with successful send methods (in the case of
+        # a problem that has multiple send methods), so remove failed
+        delete $bodies{$_} for @{ $problem->send_fail_body_ids // [] };
+
         my @body_names = sort map {
             my $name = $_->name;
             if ($link and FixMyStreet->config('AREA_LINKS_FROM_PROBLEMS')) {
@@ -711,7 +789,7 @@ sub body {
             } else {
                 FixMyStreet::Template::html_filter($name);
             }
-        } values %$bodies;
+        } values %bodies;
         if ( scalar @body_names > 2 ) {
             $body = join( ', ', splice @body_names, 0, -1);
             $body = join( ',' . _(' and '), ($body, $body_names[-1]));
@@ -771,6 +849,34 @@ sub response_templates {
     );
 }
 
+sub response_template_for {
+    my ($self, $state, $old_state, $ext_code, $old_ext_code) = @_;
+
+    # Response templates are only triggered if the state/external status has changed.
+    # And treat any fixed state as fixed.
+    my $state_changed = $state ne $old_state
+        && !( $self->is_fixed && FixMyStreet::DB::Result::Problem->fixed_states()->{$state} );
+    my $ext_code_changed = $ext_code && $ext_code ne $old_ext_code;
+    my $template;
+    if ($state_changed || $ext_code_changed) {
+        # make sure that empty string/nulls come last, and templates for a category come earlier.
+        my $order = { order_by => \"me.external_status_code DESC NULLS LAST, contact.category" };
+        my $state_params = [];
+        if ($state_changed) {
+            push @$state_params, { 'me.state' => $state, 'me.external_status_code' => ["", undef] };
+        }
+        if ($ext_code_changed) {
+            push @$state_params, { 'me.state' => '', 'me.external_status_code' => $ext_code };
+        };
+
+        $template = $self->response_templates->search({
+            auto_response => 1,
+            -or => $state_params,
+        }, $order )->first;
+    }
+    return $template;
+}
+
 =head2 response_priorities
 
 Returns all ResponsePriorities attached to this problem's category/contact, in
@@ -817,12 +923,9 @@ sub can_display_external_id {
 sub duration_string {
     my $problem = shift;
     my $cobrand = $problem->result_source->schema->cobrand;
-    my $body = $cobrand->call_hook(link_to_council_cobrand => $problem) || $problem->body(1);
+    my $body = $cobrand->call_hook( link_to_council_cobrand => $problem )
+        || $problem->body(1);
     my $handler = $cobrand->call_hook(get_body_handler_for_problem => $problem);
-    if ( $handler && $handler->call_hook('is_council_with_case_management') ) {
-        my $s = sprintf(_('Received by %s moments later'), $body);
-        return FixMyStreet::Template::SafeString->new($s);
-    }
     return unless $problem->whensent;
     my $s = sprintf(_('Sent to %s %s later'), $body,
         Utils::prettify_duration($problem->whensent->epoch - $problem->confirmed->epoch, 'minute')
@@ -886,27 +989,80 @@ sub updates_sent_to_body {
 }
 
 sub add_send_method {
-    my $self = shift;
+    my $self   = shift;
     my $sender = shift;
-    ($sender = ref $sender) =~ s/^.*:://;
-    if (my $send_method = $self->send_method_used) {
-        $self->send_method_used("$send_method,$sender");
-    } else {
+    $sender =~ s/${\SENDER_REGEX}//;
+
+    if ( my $existing_send_method = $self->send_method_used ) {
+        $self->send_method_used("$existing_send_method,$sender");
+    }
+    else {
         $self->send_method_used($sender);
     }
+}
+
+sub add_send_fail_body_ids {
+    my $self    = shift;
+    my @new_ids = @_;
+
+    $self->send_fail_body_ids(
+        [   sort { $a <=> $b }
+                uniq( @new_ids, @{ $self->send_fail_body_ids } )
+        ]
+    );
+}
+
+sub remove_send_fail_body_ids {
+    my $self       = shift;
+    my @remove_ids = @_;
+
+    my %existing_ids = map { $_ => 1 } @{ $self->send_fail_body_ids };
+
+    delete @existing_ids{@remove_ids};
+
+    $self->send_fail_body_ids( [ sort { $a <=> $b } keys %existing_ids ] );
+}
+
+sub has_given_send_fail_body_id {
+    my $self = shift;
+    my $id   = shift;
+
+    return any { $_ == $id } @{ $self->send_fail_body_ids };
+}
+
+sub send_fail_bodies {
+    my $self = shift;
+
+    my $bodies = $self->bodies;
+
+    my @send_fail_bodies;
+
+    for (@{$self->send_fail_body_ids}) {
+        my $body = $bodies->{$_};
+        push @send_fail_bodies, $body->name;
+    }
+
+    return \@send_fail_bodies;
+}
+
+sub mark_as_sent {
+    my $self = shift;
+    $self->whensent( \'current_timestamp' );
+    $self->send_fail_body_ids( [] );
 }
 
 sub resend {
     my $self = shift;
     $self->whensent(undef);
     $self->send_method_used(undef);
+    $self->send_fail_body_ids([]);
 }
 
 sub as_hashref {
     my ($self, $cols) = @_;
     my $cobrand = $self->result_source->schema->cobrand;
 
-    my $state_t = FixMyStreet::DB->resultset("State")->display($self->state);
+    my $state_t = FixMyStreet::DB->resultset("State")->display($self->state, 0, $cobrand->moniker);
 
     my $out = {
         id        => $self->id,
@@ -979,6 +1135,15 @@ has get_cobrand_logged => (
     },
 );
 
+sub cobrand_name_for_state {
+    my ($self, $cobrand) = @_;
+    my $cobrand_name = $cobrand->moniker;
+    my $names = join(',,', @{$self->body_names});
+    if ($names =~ /(Bromley|Isle of Wight|Oxfordshire|TfL)/) {
+        ($cobrand_name = lc $1) =~ s/ //g;
+    }
+    return $cobrand_name;
+}
 
 sub pin_data {
     my ($self, $page, %opts) = @_;

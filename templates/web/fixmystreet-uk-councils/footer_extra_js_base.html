@@ -1,15 +1,10 @@
 [%
-IF bodyclass.match('mappage') AND NOT bodyclass.match('formflow');
+IF bodyclass.match('mappage') AND NOT bodyclass.match('formflow') AND NOT bodyclass.match('accountpage');
     scripts.push(
         version('/cobrands/fixmystreet-uk-councils/js.js'),
         version('/vendor/OpenLayers.Projection.OrdnanceSurvey.js'),
         version('/cobrands/fixmystreet/assets.js'),
     );
-    IF alloy;
-        scripts.push(
-            version('/cobrands/fixmystreet-uk-councils/alloy.js'),
-        );
-    END;
     IF validation;
         scripts.push(
             version('/cobrands/fixmystreet-uk-councils/council_validation_rules.js'),
@@ -35,6 +30,10 @@ IF bodyclass.match('mappage') AND NOT bodyclass.match('formflow');
             version('/cobrands/tfl/assets.js'),
         );
     END;
+    scripts.push(
+        version('/cobrands/fixmystreet-uk-councils/assets.js'),
+        version('../conf/general.yml', '/js/asset_layers.js')
+    );
 END;
 IF bodyclass.match('mappage') AND bodyclass.match('formflow');
     scripts.push(

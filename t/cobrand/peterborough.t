@@ -5,6 +5,25 @@ use CGI::Simple;
 use Test::LongString;
 use Open311::PostServiceRequestUpdates;
 
+my $mock = Test::MockModule->new('FixMyStreet::Cobrand::Peterborough');
+$mock->mock('_fetch_features', sub {
+    my ($self, $args, $x, $y) = @_;
+    if ( $args->{type} && $args->{type} eq 'arcgis' ) {
+        # council land
+        if ( $x == 552617 && $args->{url} =~ m{4/query} ) {
+            return [ { geometry => { type => 'Point' } } ];
+        # leased out council land
+        } elsif ( $x == 552651 && $args->{url} =~ m{3/query} ) {
+            return [ { geometry => { type => 'Point' } } ];
+        # adopted roads
+        } elsif ( $x == 552721 && $args->{url} =~ m{7/query} ) {
+            return [ { geometry => { type => 'Point' } } ];
+        }
+        return [];
+    }
+    return [];
+});
+
 my $mech = FixMyStreet::TestMech->new;
 
 my $params = {
@@ -15,7 +34,7 @@ my $params = {
     jurisdiction => 'home',
     can_be_devolved => 1,
 };
-my $peterborough = $mech->create_body_ok(2566, 'Peterborough City Council', $params);
+my $peterborough = $mech->create_body_ok(2566, 'Peterborough City Council', $params, { cobrand => 'peterborough' });
 my $contact = $mech->create_contact_ok(email => 'FLY', body_id => $peterborough->id, category => 'General fly tipping');
 my $user = $mech->create_user_ok('peterborough@example.org', name => 'Council User', from_body => $peterborough);
 $peterborough->update( { comment_user_id => $user->id } );
@@ -133,9 +152,10 @@ subtest "no update sent to Bartec" => sub {
             problem_state => 'fixed - council', state => 'confirmed', mark_fixed => 0,
             confirmed => DateTime->now(),
         });
+        $c->discard_changes; # to get defaults
         $o->process_update($peterborough, $c);
         $c->discard_changes;
-        is $c->get_extra_metadata("cobrand_skipped_sending"), 1;
+        is $c->send_state, 'skipped';
     };
 };
 
@@ -185,28 +205,6 @@ subtest "extra bartec params are sent to open311" => sub {
         is $cgi->param('attribute[contributed_by]'), $staffuser->email, 'staff email address sent';
     };
 };
-
-my $mock = Test::MockModule->new('FixMyStreet::Cobrand::Peterborough');
-$mock->mock('_fetch_features', sub {
-    my ($self, $args, $x, $y) = @_;
-    if ( $args->{type} && $args->{type} eq 'arcgis' ) {
-        # council land
-        if ( $x == 552617 && $args->{url} =~ m{2/query} ) {
-            return [ { geometry => { type => 'Point' } } ];
-        # leased out council land
-        } elsif ( $x == 552651 && $args->{url} =~ m{3/query} ) {
-            return [ { geometry => { type => 'Point' } } ];
-        }
-
-        return [];
-    } else {
-        # adopted roads
-        if ( $x == 552721 && $args->{url} =~ m{tilma} ) {
-            return [ { geometry => { type => 'Point' } } ];
-        }
-        return [];
-    }
-});
 
 for my $test (
     {
@@ -441,7 +439,7 @@ foreach my $cobrand ( "peterborough", "fixmystreet" ) {
             $peterborough->contacts->delete_all;
             my $contact = $mech->create_contact_ok(body_id => $peterborough->id, category => 'Litter Bin Needs Emptying', email => 'Bartec-Bins');
             my $waste = $mech->create_contact_ok(body_id => $peterborough->id, category => 'Missed Collection', email => 'Bartec-MissedCollection');
-            $waste->set_extra_metadata(waste_only => 1);
+            $waste->set_extra_metadata(type => 'waste');
             $waste->update;
 
             subtest "not when getting new report categories via AJAX" => sub {

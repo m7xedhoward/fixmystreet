@@ -1,9 +1,15 @@
 use CGI::Simple;
 use Test::MockModule;
 use Test::MockTime qw(:all);
+use Test::Output;
 use FixMyStreet::TestMech;
 use FixMyStreet::Script::Reports;
+use FixMyStreet::SendReport::Open311;
 use Catalyst::Test 'FixMyStreet::App';
+
+# disable info logs for this test run
+FixMyStreet::App->log->disable('info');
+END { FixMyStreet::App->log->enable('info'); }
 
 set_fixed_time('2019-10-16T17:00:00Z'); # Out of hours
 
@@ -34,13 +40,14 @@ my $mech = FixMyStreet::TestMech->new;
 
 
 my $body = $mech->create_body_ok(2494, 'London Borough of Bexley', {
-    send_method => 'Open311', api_key => 'key', 'endpoint' => 'e', 'jurisdiction' => 'j' });
+    send_method => 'Open311', api_key => 'key', 'endpoint' => 'e', 'jurisdiction' => 'j' }, { cobrand => 'bexley' });
 $mech->create_contact_ok(body_id => $body->id, category => 'Abandoned and untaxed vehicles', email => "ConfirmABAN");
 $mech->create_contact_ok(body_id => $body->id, category => 'Lamp post', email => "StreetLightingLAMP");
 $mech->create_contact_ok(body_id => $body->id, category => 'Gulley covers', email => "GULL");
 $mech->create_contact_ok(body_id => $body->id, category => 'Damaged road', email => "ROAD");
 $mech->create_contact_ok(body_id => $body->id, category => 'Flooding in the road', email => "ConfirmFLOD");
 $mech->create_contact_ok(body_id => $body->id, category => 'Flytipping', email => "UniformFLY");
+$mech->create_contact_ok(body_id => $body->id, category => 'Graffiti', email => "GRAF");
 my $da = $mech->create_contact_ok(body_id => $body->id, category => 'Dead animal', email => "ANIM");
 $mech->create_contact_ok(body_id => $body->id, category => 'Street cleaning and litter', email => "STREET");
 $mech->create_contact_ok(body_id => $body->id, category => 'Something dangerous', email => "DANG", group => 'Danger things');
@@ -125,6 +132,7 @@ FixMyStreet::override_config {
         { category => 'Lamp post', code => 'StreetLightingLAMP', email => ['thirdparty', 'another'],
             extra => { 'name' => 'dangerous', description => 'Was it dangerous?', 'value' => 'Yes' } },
         { category => 'Flytipping', code => 'UniformFLY', email => ['eh'] },
+        { category => 'Graffiti', code => 'GRAF', email => ['p1'], extra => { 'name' => 'offensive', description => 'Is the graffiti racist or offensive?', 'value' => 'Yes' } },
         { category => 'Flooding in the road', code => 'ConfirmFLOD', email => ['flooding'] },
     ) {
         ($report) = $mech->create_problems_for_body(1, $body->id, 'On Road', {
@@ -150,7 +158,9 @@ FixMyStreet::override_config {
             }
 
             if (my $t = $test->{email}) {
-                my $email = $mech->get_email;
+                my @emails = $mech->get_email;
+                # User is getting a report_sent_confirmation_email now and the ordering is random
+                my ($email) = grep { $mech->get_text_body_from_email($_) =~ /Dear London Borough of Bexley/ } @emails;
                 $t = join('@[^@]*', @$t);
                 is $email->header('From'), '"Test User" <do-not-reply@example.org>';
                 like $email->header('To'), qr/^[^@]*$t@[^@]*$/;
@@ -164,7 +174,7 @@ FixMyStreet::override_config {
                 }
                 $mech->clear_emails_ok;
             } else {
-                $mech->email_count_is(0);
+                $mech->email_count_is(1);
             }
         };
     }
@@ -227,6 +237,54 @@ FixMyStreet::override_config {
         ], 'Request had multiple photos';
     };
 
+    subtest 'testing sending P1 emails even if Symology down', sub {
+        my ($report) = $mech->create_problems_for_body(1, $body->id, 'On Road', {
+            category => 'Damaged road', cobrand => 'bexley',
+            latitude => 51.408484, longitude => 0.074653, areas => '2494',
+        });
+        $report->set_extra_fields({ 'name' => 'dangerous', description => 'Was it dangerous?', 'value' => 'Yes' });
+        $report->update;
+
+        # I have no idea where `erequests.xml` comes from, but that's what
+        # the path appears to be when _make_request is called in FixMyStreet/Test.pm
+        Open311->_inject_response('erequests.xml', 'Failure', 400);
+
+        $mech->clear_emails_ok;
+        FixMyStreet::Script::Reports::send();
+
+        $report->discard_changes;
+        is $report->whensent, undef, 'Report not marked as sent';
+        is $report->send_method_used, undef, 'Report not sent via Open311';
+        is $report->external_id, undef, 'Report has no external ID';
+        is $report->send_fail_count, 1, 'Report marked as failed to send';
+
+        my $email = $mech->get_email;
+        my $t = join('@[^@]*', ('p1', 'outofhours', 'ooh2'));
+        is $email->header('From'), '"Test User" <do-not-reply@example.org>';
+        like $email->header('To'), qr/^[^@]*$t@[^@]*$/;
+        like $mech->get_text_body_from_email($email), qr/NSG Ref: Road ID/;
+
+        # check that it doesn't send email again on subsequent open311 failure
+        Open311->_inject_response('erequests.xml', 'Failure', 400);
+        $mech->clear_emails_ok;
+        stderr_like { # capture stderr output because debug is on
+            FixMyStreet::Script::Reports::send(0, 0, 1); # debug so it attempts to resend immediately
+        } qr/request failed: 400 Bad Request/;
+        $report->discard_changes;
+        is $report->send_fail_count, 2, 'Send fail count increased';
+        is $report->whensent, undef, 'Report not marked as sent';
+        ok $mech->email_count_is(0), "Email wasn't sent";
+
+        # check that open311 send success doesn't result in email being sent again
+        FixMyStreet::Script::Reports::send(0, 0, 1); # debug so it attempts to resend immediately
+        $report->discard_changes;
+        is $report->send_fail_count, 2, 'Send fail count didn\'t increase';
+        ok $report->whensent, 'Report has been sent';
+        ok $report->external_id, 'Report has an external ID';
+        ok $mech->email_count_is(1), "1 email was sent";
+        like $mech->get_text_body_from_email($mech->get_email), qr/Your report to London Borough of Bexley has been logged on FixMyStreet./, 'Confirmation email sent to reporter';
+    };
+
     subtest 'anonymous update message' => sub {
         my $report = FixMyStreet::DB->resultset("Problem")->first;
         my $staffuser = $mech->create_user_ok('super@example.org');
@@ -235,6 +293,25 @@ FixMyStreet::override_config {
         $mech->get_ok('/report/' . $report->id);
         $mech->content_contains('Posted by <strong>London Borough of Bexley</strong>');
         $mech->content_contains('Posted anonymously by a non-staff user');
+    };
+
+    subtest 'update on report with NSGRef sends nsg_ref argument to open311' => sub {
+        my $report = FixMyStreet::DB->resultset("Problem")->first;
+        $report->set_extra_fields({name => 'NSGRef', description => 'NSG Ref', value => '123/456'});
+        $report->update;
+        my $comment = $mech->create_comment_for_problem($report, $report->user, 'Commenter', 'Normal update', 't', 'confirmed', 'confirmed');
+        $comment->discard_changes;
+        my $test_res = '<?xml version="1.0" encoding="utf-8"?><service_request_updates><request_update><update_id>248</update_id></request_update></service_request_updates>';
+        my $o = Open311->new(
+          fixmystreet_body => $body,
+        );
+        Open311->_inject_response('servicerequestupdates.xml', $test_res);
+        $o->post_service_request_update($comment);
+
+        my $req = Open311->test_req_used;
+        my $c = CGI::Simple->new( $req->content );
+
+        is $c->param('nsg_ref'), '123/456', 'nsg included in update';
     };
 
     subtest 'dead animal url changed for staff users' => sub {
@@ -260,6 +337,51 @@ FixMyStreet::override_config {
     subtest 'reference number is shown' => sub {
         $mech->get_ok('/report/' . $report->id);
         $mech->content_contains('Report ref:&nbsp;' . $report->id);
+    };
+
+    subtest 'phishing warning is shown for new reports' => sub {
+        $mech->log_out_ok;
+        $mech->get_ok('/report/new?longitude=0.15356&latitude=51.45556&category=Lamp+post');
+        $mech->content_contains('if asked for personal information, please do not respond');
+    };
+
+    subtest 'phishing warning is shown on report pages' => sub {
+        $mech->get_ok('/report/' . $report->id);
+        $mech->content_contains('if asked for personal information, please do not respond');
+    };
+
+    subtest "test ID in update email" => sub {
+        $mech->clear_emails_ok;
+        (my $report) = $mech->create_problems_for_body(1, $body->id, 'On Road', {
+            category => 'Lamp post', cobrand => 'bexley',
+            latitude => 51.408484, longitude => 0.074653, areas => '2494',
+        });
+        my $id = $report->id;
+        my $user = $mech->log_in_ok('super@example.org');
+        $user->update({ from_body => $body, is_superuser => 1, name => 'Staff User' });
+        $mech->get_ok("/report/$id");
+        $mech->submit_form_ok({
+                with_fields => {
+                    form_as => 'Another User',
+                    username => 'test@email.com',
+                    name => 'Test user',
+                    update => 'Example update',
+                },
+        }, "submit details");
+        like $mech->get_text_body_from_email, qr/The report's reference number is $id/, 'Update confirmation email contains id number';
+};
+
+subtest 'test ID in questionnaire email' => sub {
+        $mech->clear_emails_ok;
+        (my $report) = $mech->create_problems_for_body(1, $body->id, 'On Road', {
+            category => 'Lamp post', cobrand => 'bexley',
+            latitude => 51.408484, longitude => 0.074653, areas => '2494',
+            whensent => DateTime->now->subtract(years => 1),
+        });
+        FixMyStreet::DB->resultset('Questionnaire')->send_questionnaires();
+        my $text = $mech->get_text_body_from_email;
+        my $id = $report->id;
+        like $text, qr/The report's reference number is $id/, 'Questionnaire email contains id number';
     };
 };
 
@@ -324,9 +446,9 @@ subtest 'geocoder' => sub {
 };
 
 subtest 'out of hours' => sub {
-    my $lwp = Test::MockModule->new('LWP::UserAgent');
-    $lwp->mock('get', sub {
-        HTTP::Response->new(200, 'OK', [], <<EOF);
+    my $ukc = Test::MockModule->new('FixMyStreet::Cobrand::UK');
+    $ukc->mock('_fetch_url', sub {
+        <<EOF;
 {
     "england-and-wales": {
         "events": [
@@ -346,8 +468,8 @@ EOF
     is $cobrand->_is_out_of_hours(), 1, 'out of hours at weekends';
     set_fixed_time('2019-12-25T12:00:00Z');
     is $cobrand->_is_out_of_hours(), 1, 'out of hours on bank holiday';
-    set_fixed_time('2021-12-24T12:00:00Z');
-    is $cobrand->_is_out_of_hours(), 1, 'out of hours on Christmas Eve 2021';
+    set_fixed_time('2022-12-28T12:00:00Z');
+    is $cobrand->_is_out_of_hours(), 1, 'out of hours on special day 2022';
 };
 
 

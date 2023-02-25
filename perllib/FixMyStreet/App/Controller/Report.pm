@@ -68,6 +68,7 @@ sub ajax : Path('ajax') : Args(1) {
     my ( $self, $c, $id ) = @_;
 
     $c->stash->{ajax} = 1;
+    $c->forward('/set_app_cors_header');
     $c->forward('load_problem_or_display_error', [ $id ]);
     $c->forward('display');
 }
@@ -80,6 +81,10 @@ Display a report.
 
 sub display :PathPart('') :Chained('id') :Args(0) {
     my ( $self, $c ) = @_;
+
+    if ($c->stash->{problem}->cobrand_data eq 'waste' && $c->stash->{problem}->category eq 'Bulky collection' ) {
+        $c->detach('/waste/bulky_view');
+    }
 
     $c->forward('/auth/get_csrf_token');
     $c->forward( 'load_updates' );
@@ -94,8 +99,8 @@ sub display :PathPart('') :Chained('id') :Args(0) {
         my $okay = 1;
         my $contact = $c->stash->{problem}->contact;
         if ($contact && ($c->user->get_extra_metadata('assigned_categories_only') || $contact->get_extra_metadata('assigned_users_only'))) {
-            my $user_cats = $c->user->get_extra_metadata('categories') || [];
-            $okay = any { $contact->id eq $_ } @$user_cats;
+            my $user_cats = $c->user->categories || [];
+            $okay = any { $contact->category eq $_ } @$user_cats;
         }
         if ($okay) {
             $c->stash->{relevant_staff_user} = 1;
@@ -411,7 +416,7 @@ sub inspect : Private {
     $c->forward('/admin/reports/categories_for_point');
     $c->stash->{report_meta} = { map { 'x' . $_->{name} => $_ } @{ $c->stash->{problem}->get_extra_fields() } };
 
-    if ($c->cobrand->can('body')) {
+    if ($c->cobrand->body) {
         my $priorities_by_category = FixMyStreet::App->model('DB::ResponsePriority')->by_categories(
             $c->stash->{contacts},
             body_id => $c->cobrand->body->id,
@@ -525,7 +530,9 @@ sub inspect : Private {
         my $assigned = ($c->get_param('assignment'));
         if ($assigned && $assigned eq 'unassigned') {
             # take off shortlist
-            $problem->user->remove_from_planned_reports($problem);
+            my $current_assignee = $problem->shortlisted_user;
+            $current_assignee->remove_from_planned_reports($problem)
+                if $current_assignee;
         } elsif ($assigned) {
             my $assignee = $c->model('DB::User')->find({ id => $assigned });
             $assignee->add_to_planned_reports($problem);
@@ -675,7 +682,7 @@ sub _nearby_json :Private {
     my $dist = $c->get_param('distance') || '';
     $dist = 1000 unless $dist =~ /^\d+$/;
     $dist = 1000 if $dist > 1000;
-    $params->{distance} = $dist / 1000;
+    $params->{distance} = $dist / 1000 unless $params->{distance};
 
     my $pin_size = $c->get_param('pin_size') || '';
     $pin_size = 'small' unless $pin_size =~ /^(mini|small|normal|big)$/;
@@ -759,6 +766,8 @@ sub stash_category_groups : Private {
             $a->[0] cmp $b->[0];
         } @list;
         @list = map { $_->[1] } @list;
+
+        $c->cobrand->call_hook(munge_mixed_category_groups => \@list);
         $c->stash->{category_groups} = \@list;
         return;
     }
@@ -776,6 +785,9 @@ sub stash_category_groups : Private {
     push @category_groups, { name => _('Other'), categories => $category_groups{_('Other')} } if ($category_groups{_('Other')});
     push @category_groups, { name => _('Multiple Groups'), categories => $category_groups{_('Multiple Groups')} } if ($category_groups{_('Multiple Groups')});
     unshift @category_groups, { name => _('No Group'), categories => $category_groups{_('No Group')} } if $category_groups{_('No Group')};
+
+    $c->cobrand->call_hook(munge_unmixed_category_groups => \@category_groups, $opts);
+
     $c->stash->{category_groups}  = \@category_groups;
 }
 

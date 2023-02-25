@@ -3,6 +3,8 @@ package Integrations::SCP;
 use Moo;
 with 'FixMyStreet::Roles::SOAPIntegration';
 
+use Data::Dumper;
+use Sys::Syslog;
 use DateTime;
 use MIME::Base64;
 use Digest::HMAC;
@@ -25,11 +27,44 @@ has endpoint => (
     }
 );
 
+has log_open => (
+    is => 'ro',
+    lazy => 1,
+    builder => '_syslog_open',
+);
+
+sub _syslog_open {
+    my $self = shift;
+    my $ident = $self->config->{log_ident} or return 0;
+    my $opts = 'pid,ndelay';
+    my $facility = 'local6';
+    my $log;
+    eval {
+        Sys::Syslog::setlogsock('unix');
+        openlog($ident, $opts, $facility);
+        $log = $ident;
+    };
+    $log;
+}
+
+sub DEMOLISH {
+    my $self = shift;
+    closelog() if $self->log_open;
+}
+
+sub log {
+    my ($self, $str) = @_;
+    $self->log_open or return;
+    $str = Dumper($str) if ref $str;
+    syslog('debug', '%s', $str);
+}
 
 sub call {
     my ($self, $method, @params) = @_;
 
     require SOAP::Lite;
+    $self->log($method);
+    $self->log(\@params);
     my $res = $self->endpoint->call(
         SOAP::Data->name($method)->attr({
             'xmlns:scpbase' => 'http://www.capita-software-services.com/scp/base',
@@ -39,11 +74,15 @@ sub call {
         make_soap_structure_with_attr(@params),
     );
 
+    my $body;
     if ( $res ) {
-        return $res->body;
+        $body = $res->body;
+        $self->log($body);
+    } else {
+        $self->log('No response');
     }
 
-    return undef;
+    return $body;
 }
 
 sub credentials {
@@ -78,6 +117,43 @@ sub pay {
     my ($self, $args) = @_;
 
     my $credentials = $self->credentials($args);
+    my $entry_method = $args->{staff} ? 'CNP' : 'ECOM';
+
+    for my $field( qw/name address1 address2/ ) {
+        $args->{$field} = substr($args->{$field}, 0, 50) if $args->{$field};
+    }
+
+    my @items;
+    my $total = 0;
+    foreach (@{$args->{items}}) {
+        push @items, ixhash(
+            'scpbase:itemSummary' => ixhash(
+                'scpbase:description' => $_->{description},
+                'scpbase:amountInMinorUnits' => $_->{amount},
+                'scpbase:reference' => $_->{reference},
+            ),
+            $self->config->{scp_vat_code} ? (
+                'scpbase:tax' => {
+                    'scpbase:vat' =>ixhash(
+                        'scpbase:vatCode' => $self->config->{scp_vat_code},
+                        'scpbase:vatRate' => $self->config->{scp_vat_rate} || 0,
+                        'scpbase:vatAmountInMinorUnits' => $_->{vat} || 0,
+                    ),
+                },
+            ) : (),
+            'scpbase:lgItemDetails' => ixhash(
+                'scpbase:fundCode' => $self->config->{scp_fund_code},
+                'scpbase:additionalReference' => $_->{lineId},
+                'scpbase:narrative' => $args->{uprn},
+                'scpbase:accountName' => {
+                    'scpbase:surname' => $args->{name},
+                },
+            ),
+            'scpbase:lineId' => $_->{lineId},
+        );
+        $total += $_->{amount};
+    }
+
     my $obj = [
         'common:credentials' => $credentials,
         'scpbase:requestType' => 'payOnly' ,
@@ -88,52 +164,34 @@ sub pay {
             'scpbase:siteId' => $self->config->{siteID},
             'scpbase:scpId' => $self->config->{scpID},
         ),
-        'scpbase:panEntryMethod' => 'ECOM',
+        'scpbase:panEntryMethod' => $entry_method,
         'scpbase:additionalInstructions' => {
             'scpbase:systemCode' => 'SCP'
         },
         'scpbase:billing' => {
             'scpbase:cardHolderDetails' => ixhash(
+                'scpbase:cardHolderName' => $args->{name},
                 'scpbase:address' => ixhash(
                     'scpbase:address1' => $args->{address1},
                     'scpbase:address2' => $args->{address2},
                     'scpbase:country' => $args->{country},
                     'scpbase:postcode' => $args->{postcode},
                 ),
-                'scpbase:contact' => {
-                    'scpbase:email' => $args->{email},
-                }
+                $args->{email} ? (
+                    'scpbase:contact' => {
+                        'scpbase:email' => $args->{email},
+                    }
+                ) : (),
             ),
         },
         'sale' => ixhash(
             'scpbase:saleSummary' => ixhash(
                 'scpbase:description' => $args->{description},
-                'scpbase:amountInMinorUnits' => $args->{amount},
+                'scpbase:amountInMinorUnits' => $total,
                 'scpbase:reference' => $args->{ref},
             ),
             items => {
-                item => [
-                    ixhash(
-                        'scpbase:itemSummary' => ixhash(
-                            'scpbase:description' => $args->{description},
-                            'scpbase:amountInMinorUnits' => $args->{amount},
-                            'scpbase:reference' => $self->config->{customer_ref},
-                        ),
-                        'scpbase:tax' => {
-                            'scpbase:vat' =>ixhash(
-                                'scpbase:vatCode' => $self->config->{scp_vat_code},
-                                'scpbase:vatRate' => $self->config->{scp_vat_rate} || 0,
-                                'scpbase:vatAmountInMinorUnits' => $args->{vat} || 0,
-                            ),
-                        },
-                        'scpbase:lgItemDetails' => ixhash(
-                            'scpbase:fundCode' => $self->config->{scp_fund_code},
-                            'scpbase:additionalReference' => $args->{ref},
-                            'scpbase:narrative' => $args->{uprn},
-                        ),
-                        'scpbase:lineId' => $args->{ref},
-                    ),
-                ],
+                item => \@items,
             },
         ),
     ];

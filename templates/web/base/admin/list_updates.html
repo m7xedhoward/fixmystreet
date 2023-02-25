@@ -15,14 +15,7 @@
     <tr[% ' class="adminhidden"' IF update.state == 'hidden' || update.problem.state == 'hidden' %]>
         <td rowspan=2>
           [%~ IF update.state == 'confirmed' && update.problem.state != 'hidden' -%]
-          [%- cobrand_data = update.cobrand_data;
-              cobrand_data = c.data_for_generic_update IF !update.cobrand;
-              IF cobrand_data;
-                uri = c.uri_for_email( '/report', update.problem.id, cobrand_data );
-              ELSE;
-                uri = c.uri_for_email( '/report', update.problem.id );
-              END;
-          %]
+          [%- uri = c.uri_for_email( '/report', update.problem.id ) %]
             <a href="[% uri %]#update_[% update.id %]" class="admin-offsite-link">[% update.id %]</a>
           [%- ELSE %]
             [%- update.id %]
@@ -46,13 +39,18 @@
         </td>
     </tr>
     <tr>
-        <td colspan=5>[% update.text | html %]</td>
+        <td colspan=5>[% update.text | html %]
+        [% IF update.private_email_text %]
+            <hr />
+            [% loc('Template email response:') %] [% update.private_email_text | html %]
+        [% END %]
+        </td>
     </tr>
 [% END -%]
 </table>
 
 [% IF updates_pager %]
-[% INCLUDE 'pagination.html' admin=1 param='u' pager=updates_pager hash='updates' %]
+[% INCLUDE 'pagination.html' param='u' pager=updates_pager hash='updates' %]
 [% END %]
 
 [% END %]

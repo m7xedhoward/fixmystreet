@@ -9,30 +9,32 @@ has_field payment_method => (
     label => 'How do you want to pay?',
     required => 1,
     widget => 'RadioGroup',
-    options => [
-        { value => 'direct_debit', label => 'Direct Debit', hint => 'Set up your payment details once, and we’ll automatically renew your subscription each year, until you tell us to stop. You can cancel or amend at any time.' },
-        { value => 'credit_card', label => 'Debit or Credit Card' },
-    ],
 );
 
-has_field billing_differ => (
-    type => 'Checkbox',
-    option_label => 'Check if different to collection address',
-    label => "Billing address",
-    tags => {
-        toggle => 'form-billing_address-row'
-    },
-);
+sub options_payment_method {
+    my $form = shift;
+    my @options = (
+        { value => 'direct_debit', label => 'Direct Debit', hint => 'Set up your payment details once, and we’ll automatically renew your subscription each year, until you tell us to stop. You can cancel or amend at any time.', data_hide => '#form-cheque_reference-row' },
+        { value => 'credit_card', label => 'Debit or Credit Card', data_hide => '#form-cheque_reference-row' },
+    );
+    if ($form->{c}->stash->{waste_features}->{dd_disabled}) {
+        shift @options;
+    }
+    if ($form->{c}->cobrand->waste_cheque_payments) {
+        push @options, { label => 'Cheque', value => 'cheque', data_show => '#form-cheque_reference-row' };
+    }
+    return @options;
+}
 
-has_field billing_address => (
+has_field cheque_reference => (
     type => 'Text',
-    widget => 'Textarea',
-    label => "Billing address",
+    label => 'Cheque reference',
+    required_when => { payment_method => 'cheque' },
 );
 
 has_field name => (
     type => 'Text',
-    label => 'Your name',
+    label => 'Full name',
     required => 1,
     validate_method => sub {
         my $self = shift;

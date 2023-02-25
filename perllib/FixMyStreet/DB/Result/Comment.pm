@@ -35,9 +35,8 @@ __PACKAGE__->add_columns(
   "created",
   {
     data_type     => "timestamp",
-    default_value => \"current_timestamp",
+    default_value => \"CURRENT_TIMESTAMP",
     is_nullable   => 0,
-    original      => { default_value => \"now()" },
   },
   "confirmed",
   { data_type => "timestamp", is_nullable => 1 },
@@ -71,6 +70,10 @@ __PACKAGE__->add_columns(
   { data_type => "timestamp", is_nullable => 1 },
   "whensent",
   { data_type => "timestamp", is_nullable => 1 },
+  "send_state",
+  { data_type => "text", default_value => "unprocessed", is_nullable => 0 },
+  "private_email_text",
+  { data_type => "text", is_nullable => 1 },
 );
 __PACKAGE__->set_primary_key("id");
 __PACKAGE__->has_many(
@@ -93,8 +96,8 @@ __PACKAGE__->belongs_to(
 );
 
 
-# Created by DBIx::Class::Schema::Loader v0.07035 @ 2019-04-25 12:06:39
-# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:CozqNY621I8G7kUPXi5RoQ
+# Created by DBIx::Class::Schema::Loader v0.07035 @ 2022-03-29 14:20:23
+# DO NOT MODIFY THIS OR ANYTHING ABOVE! md5sum:x+v4WPYnfPF/ac+UBsPW9g
 #
 
 __PACKAGE__->load_components("+FixMyStreet::DB::RABXColumn");
@@ -280,7 +283,7 @@ sub meta_line {
 
     my $contributed_as = $self->get_extra_metadata('contributed_as') || '';
     my $staff = $self->user->from_body || $self->get_extra_metadata('is_body_user') || $self->get_extra_metadata('is_superuser');
-    my $anon = $self->anonymous || !$self->name;
+    my $anon = $self->anonymous || !$self->name || $cobrand->call_hook('is_comment_anonymous');
 
     if ($anon && (!$staff || $contributed_as eq 'anonymous_user' || $contributed_as eq 'another_user')) {
         $meta = $cobrand->call_hook(update_anonymous_message => $self);
@@ -307,6 +310,8 @@ sub meta_line {
                 $body = 'Hounslow Highways';
             } elsif ($body eq 'Isle of Wight Council') {
                 $body = 'Island Roads';
+            } elsif ($body eq 'Thamesmead') {
+               $body = 'Peabody';
             }
         }
         my $cobrand_always_view_body_user = $cobrand->call_hook(always_view_body_contribute_details => $contributed_as);
@@ -353,12 +358,7 @@ sub problem_state_display {
     return '' unless $state;
 
     my $cobrand = $self->result_source->schema->cobrand;
-    my $cobrand_name = $cobrand->moniker;
-    my $names = join(',,', @{$self->problem->body_names});
-    if ($names =~ /(Bromley|Isle of Wight|TfL)/) {
-        ($cobrand_name = lc $1) =~ s/ //g;
-    }
-
+    my $cobrand_name = $self->problem->cobrand_name_for_state($cobrand);
     return FixMyStreet::DB->resultset("State")->display($state, 1, $cobrand_name);
 }
 

@@ -109,7 +109,8 @@ sub log_in_ok {
     my $mech  = shift;
     my $username = shift;
 
-    $mech->get_ok('/auth'); # Doing this here so schema cobrand set appropriately (for e.g. TfL password setting)
+    # Staff extra for Kingston but doesn't hurt anyone else
+    $mech->get_ok('/auth?staff=1'); # Doing this here so schema cobrand set appropriately (for e.g. TfL password setting)
 
     $username = $mech->uniquify_email($username, (caller)[1]);
     my $user = $mech->create_user_ok($username);
@@ -180,13 +181,9 @@ sub delete_user {
     for my $p ( $user->problems ) {
         $p->comments->delete;
         $p->questionnaires->delete;
-        $p->user_planned_reports->delete;
         $p->delete;
     }
-    for my $a ( $user->alerts ) {
-        $a->alerts_sent->delete;
-        $a->delete;
-    }
+    $user->alerts->delete;
     $_->delete for $user->comments;
     $_->delete for $user->admin_logs;
     $_->delete for $user->user_body_permissions;
@@ -650,12 +647,16 @@ sub create_contact_ok {
 }
 
 sub create_body_ok {
-    my ( $self, $area_id, $name, $params ) = @_;
+    my ( $self, $area_id, $name, $params, $extra ) = @_;
 
     $params->{name} = $name;
 
     my $body = FixMyStreet::DB->resultset('Body');
     $body = $body->find_or_create( $params );
+    if ($extra) {
+        $body->extra($extra);
+        $body->update;
+    }
     ok $body, "found/created body $name";
 
     $body->body_areas->delete;

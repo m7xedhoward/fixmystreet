@@ -30,7 +30,7 @@ my $mech = FixMyStreet::TestMech->new;
 
 my $other_body = $mech->create_body_ok(1234, 'Some Other Council');
 my $body = $mech->create_body_ok(2651, 'City of Edinburgh Council');
-my @cats = ('Litter', 'Other', 'Potholes', 'Traffic lights');
+my @cats = ('Litter', 'Other', 'Potholes', 'Traffic lights & bells');
 for my $contact ( @cats ) {
     my $c = $mech->create_contact_ok(body_id => $body->id, category => $contact, email => "$contact\@example.org");
     if ($contact eq 'Potholes') {
@@ -41,20 +41,27 @@ for my $contact ( @cats ) {
 
 my $superuser = $mech->create_user_ok('superuser@example.com', name => 'Super User', is_superuser => 1);
 my $counciluser = $mech->create_user_ok('counciluser@example.com', name => 'Council User', from_body => $body);
+my $role = FixMyStreet::DB->resultset("Role")->create({
+    body => $body,
+    name => 'Role A',
+    permissions => ['report_inspect', 'planned_reports'],
+});
+$counciluser->add_to_roles($role);
 my $normaluser = $mech->create_user_ok('normaluser@example.com', name => 'Normal User');
 
 my $body_id = $body->id;
 my $area_id = '60705';
 my $alt_area_id = '62883';
+my $old_area_id = '58805';
 
 my $last_month = DateTime->now->subtract(months => 2);
 $mech->create_problems_for_body(2, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Potholes', cobrand => 'no2fat' });
-$mech->create_problems_for_body(3, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights', cobrand => 'no2fa', dt => $last_month });
+$mech->create_problems_for_body(3, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights & bells', cobrand => 'no2fa', dt => $last_month });
 $mech->create_problems_for_body(1, $body->id, 'Title', { areas => ",$alt_area_id,2651,", category => 'Litter', cobrand => 'no2fa' });
 
-my @scheduled_problems = $mech->create_problems_for_body(7, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights', cobrand => 'no2fa' });
+my @scheduled_problems = $mech->create_problems_for_body(7, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights & bells', cobrand => 'no2fa' });
 my @fixed_problems = $mech->create_problems_for_body(4, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Potholes', cobrand => 'no2fa' });
-my @closed_problems = $mech->create_problems_for_body(3, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights', cobrand => 'no2fa' });
+my @closed_problems = $mech->create_problems_for_body(3, $body->id, 'Title', { areas => ",$area_id,2651,", category => 'Traffic lights & bells', cobrand => 'no2fa' });
 
 my $first_problem_id;
 my $first_update_id;
@@ -66,6 +73,7 @@ foreach my $problem (@scheduled_problems) {
 }
 
 foreach my $problem (@fixed_problems) {
+    $problem->set_extra_metadata(contributed_by => $counciluser->id);
     $problem->update({ state => 'fixed - council' });
     $mech->create_comment_for_problem($problem, $counciluser, 'Title', 'text', 0, 'confirmed', 'fixed');
 }
@@ -148,7 +156,7 @@ FixMyStreet::override_config {
 
     subtest 'The correct categories and totals shown by default' => sub {
         $mech->get_ok("/dashboard");
-        my $expected_cats = [ 'All', 'Litter', 'Other', 'Traffic lights', 'Potholes' ];
+        my $expected_cats = [ 'All', 'Litter', 'Other', 'Traffic lights & bells', 'Potholes' ];
         my $res = $categories->scrape( $mech->content );
         $mech->content_contains('<optgroup label="Road">');
         is_deeply( $res->{cats}, $expected_cats, 'correct list of categories' );
@@ -179,11 +187,17 @@ FixMyStreet::override_config {
         test_table($mech->content, 0, 17, 17, 3, 0, 3, 3, 17, 20);
     };
 
+    subtest 'test roles' => sub {
+        # All the fixed (Pothole) reports only
+        $mech->get_ok("/dashboard?group_by=category&role=" . $role->id);
+        test_table($mech->content, 0, 0, 4, 0, 4);
+    };
+
     subtest 'export as csv' => sub {
         $mech->create_problems_for_body(1, $body->id, 'Title', {
             detail => "this report\nis split across\nseveral lines",
             category => 'Problem one',
-            areas => ",$alt_area_id,2651,",
+            areas => ",$old_area_id,2651,",
         });
         $mech->get_ok('/dashboard?export=1');
         my @rows = $mech->content_as_csv;
@@ -221,6 +235,7 @@ FixMyStreet::override_config {
         is $rows[5]->[15], 'Trowbridge', 'Ward column is name not ID';
         is $rows[5]->[16], '529025', 'Correct Easting conversion';
         is $rows[5]->[17], '179716', 'Correct Northing conversion';
+        is $rows[18]->[15], 'Bishops Cannings', 'Can see old ward';
     };
 
     subtest 'export updates as csv' => sub {

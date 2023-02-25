@@ -22,9 +22,9 @@ my $user = FixMyStreet::DB->resultset('User')->find_or_create(
 );
 
 my %bodies = (
-    2237 => FixMyStreet::DB->resultset("Body")->create({ name => 'Oxfordshire' }),
-    2494 => FixMyStreet::DB->resultset("Body")->create({ name => 'Bexley' }),
-    2636 => FixMyStreet::DB->resultset("Body")->create({ name => 'Isle of Wight' }),
+    2237 => FixMyStreet::DB->resultset("Body")->create({ name => 'Oxfordshire', extra => { cobrand => 'oxfordshire' } }),
+    2494 => FixMyStreet::DB->resultset("Body")->create({ name => 'Bexley', extra => { cobrand => 'bexley' }  }),
+    2636 => FixMyStreet::DB->resultset("Body")->create({ name => 'Isle of Wight', extra => { cobrand => 'isleofwight' }  }),
     2482 => FixMyStreet::DB->resultset("Body")->create({
         name => 'Bromley',
         send_method => 'Open311',
@@ -32,6 +32,7 @@ my %bodies = (
         endpoint => 'endpoint',
         comment_user_id => $user->id,
         blank_updates_permitted => 1,
+        extra => { cobrand => 'bromley' }
     }),
     2651 => FixMyStreet::DB->resultset("Body")->create({ name => 'Edinburgh' }),
 );
@@ -39,9 +40,20 @@ $bodies{2237}->body_areas->create({ area_id => 2237 });
 $bodies{2494}->body_areas->create({ area_id => 2494 });
 $bodies{2636}->body_areas->create({ area_id => 2636 });
 
+my $contact = FixMyStreet::DB->resultset('Contact')->find_or_create({
+    state => 'confirmed',
+    editor => 'Test',
+    whenedited => \'current_timestamp',
+    note => 'Created for test',
+    body_id => $bodies{2482}->id,
+    category => 'Potholes',
+    email => 'potholes@example.com',
+});
+
 my $response_template = $bodies{2482}->response_templates->create({
     title => "investigating template",
     text => "We are investigating this report.",
+    email_text => "Thank you - we're looking into this now",
     auto_response => 1,
     state => "investigating"
 });
@@ -453,6 +465,7 @@ for my $test (
         is $c->problem_state, $test->{problem_state}, 'problem_state correct';
         is $c->mark_open, $test->{mark_open}, 'mark_open correct';
         is $c->state, $test->{comment_state} || 'confirmed', 'comment state correct';
+        is $c->send_state, 'processed', 'marked as processed so not resent';
         is $problem->state, $test->{end_state}, 'correct problem state';
         $problem->comments->delete;
     };
@@ -698,7 +711,7 @@ subtest 'using start and end date' => sub {
     my $end_dt = $start_dt->clone;
     $start_dt->subtract( days => 1 );
 
-    my $update = Open311::GetServiceRequestUpdates->new( 
+    my $update = Open311::GetServiceRequestUpdates->new(
         system_user => $user,
         start_date => $start_dt,
         end_date => $end_dt,
@@ -786,6 +799,59 @@ subtest 'check that existing comments are not duplicated' => sub {
     is $problem->comments->count, 2, 'if comments are deleted then they are added';
 };
 
+subtest "hides duplicate updates from endpoint" => sub {
+    my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>UPDATE_1</update_id>
+    <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+    <status>IN_PROGRESS</status>
+    <description>This is a note</description>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+    my $requests_xml2 = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>UPDATE_2</update_id>
+    <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+    <status>IN_PROGRESS</status>
+    <description>This is a note</description>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+
+    $problem->comments->delete;
+
+    my $update_dt = DateTime->now(formatter => DateTime::Format::W3CDTF->new);
+
+    $requests_xml =~ s/UPDATED_DATETIME/$update_dt/g;
+    $requests_xml2 =~ s/UPDATED_DATETIME/$update_dt/g;
+
+    my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com');
+
+    my $update = Open311::GetServiceRequestUpdates->new(
+        system_user => $user,
+        current_open311 => $o,
+        current_body => $bodies{2482},
+    );
+
+    Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+    $update->process_body;
+    $problem->discard_changes;
+    is $problem->comments->count, 1;
+    is $problem->comments->search({ state => 'confirmed' })->count, 1;
+
+    Open311->_inject_response('/servicerequestupdates.xml', $requests_xml2);
+    $update->process_body;
+    $problem->discard_changes;
+    is $problem->comments->count, 2;
+    is $problem->comments->search({ state => 'confirmed' })->count, 1;
+
+};
+
 subtest 'check that can limit fetching to a body' => sub {
     my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
     <service_requests_updates>
@@ -809,7 +875,7 @@ subtest 'check that can limit fetching to a body' => sub {
     Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
 
     my $update = Open311::GetServiceRequestUpdates->new(
-        body => 'Oxfordshire',
+        bodies => ['Oxfordshire'],
         system_user => $user,
     );
 
@@ -819,7 +885,50 @@ subtest 'check that can limit fetching to a body' => sub {
     is $problem->comments->count, 0, 'no comments after fetching updates';
 
     $update = Open311::GetServiceRequestUpdates->new(
-        body => 'Bromley',
+        bodies => ['Bromley'],
+        system_user => $user,
+    );
+
+    $update->fetch( $o );
+
+    $problem->discard_changes;
+    is $problem->comments->count, 1, '1 comment after fetching updates';
+};
+
+subtest 'check that can exclude fetching from a body' => sub {
+    my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>638344</update_id>
+    <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+    <status>open</status>
+    <description>This is a note</description>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+
+    $problem->comments->delete;
+
+    is $problem->comments->count, 0, 'one comment before fetching updates';
+
+    $requests_xml =~ s/UPDATED_DATETIME/$dt/;
+
+    my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+    Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+    my $update = Open311::GetServiceRequestUpdates->new(
+        bodies_exclude => ['Bromley'],
+        system_user => $user,
+    );
+
+    $update->fetch( $o );
+
+    $problem->discard_changes;
+    is $problem->comments->count, 0, 'no comments after fetching updates';
+
+    $update = Open311::GetServiceRequestUpdates->new(
+        bodies_exclude => ['Oxfordshire'],
         system_user => $user,
     );
 
@@ -911,26 +1020,90 @@ subtest 'check that external_status_code is stored correctly' => sub {
     is $problem->get_extra_metadata('external_status_code'), '', "external status code unset";
 };
 
-subtest 'check that external_status_code triggers auto-responses' => sub {
+for my $test (
+        {
+            template_options => {
+                title => "Acknowledgement",
+                text => "Thank you for your report. We will provide an update within 24 hours.",
+                email_text => "Thank you for your report. This is the email text template text.",
+                auto_response => 1,
+                state => '',
+                external_status_code => "060"
+            },
+            result => "Thank you for your report. This is the email text template text.",
+            test_comment => 'Template email_text attached to comment'
+        },
+        {
+            template_options => {
+                title => "Acknowledgement",
+                text => "Thank you for your report. We will provide an update within 24 hours.",
+                auto_response => 1,
+                state => '',
+                external_status_code => "060"
+            },
+            result => undef,
+            test_comment => 'No template email_text attached to comment'
+        },
+) {
+    subtest 'check that external_status_code triggers auto-responses' => sub {
+        my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+        <service_requests_updates>
+        <request_update>
+        <update_id>638344</update_id>
+        <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+        <status>open</status>
+        <description></description>
+        <updated_datetime>UPDATED_DATETIME</updated_datetime>
+        <external_status_code>060</external_status_code>
+        </request_update>
+        </service_requests_updates>
+        };
+
+        my $response_template = $bodies{2482}->response_templates->create($test->{ template_options });
+        $problem->comments->delete;
+        $problem->set_extra_metadata('external_status_code', '');
+        $problem->update;
+
+        $requests_xml =~ s/UPDATED_DATETIME/$dt/;
+
+        my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+        Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+        my $update = Open311::GetServiceRequestUpdates->new(
+            system_user => $user,
+            current_open311 => $o,
+            current_body => $bodies{2482},
+        );
+
+        $update->process_body;
+
+        $problem->discard_changes;
+
+        is $problem->comments->count, 1, 'one comment after fetching updates';
+
+        is $problem->comments->first->text, "Thank you for your report. We will provide an update within 24 hours.", "correct external status code on first comment";
+        is $problem->comments->first->private_email_text, $test->{ result }, $test->{ test_comment };
+        $response_template->delete;
+    };
+};
+
+subtest 'check that no external_status_code and no state change does not trigger incorrect template' => sub {
+    $problem->state('action scheduled');
+    $problem->set_extra_metadata(external_status_code => '123');
+    $problem->update;
+
     my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
     <service_requests_updates>
     <request_update>
     <update_id>638344</update_id>
     <service_request_id>@{[ $problem->external_id ]}</service_request_id>
-    <status>open</status>
+    <status>action_scheduled</status>
     <description></description>
     <updated_datetime>UPDATED_DATETIME</updated_datetime>
-    <external_status_code>060</external_status_code>
+    <external_status_code></external_status_code>
     </request_update>
     </service_requests_updates>
     };
-
-    my $response_template = $bodies{2482}->response_templates->create({
-        title => "Acknowledgement",
-        text => "Thank you for your report. We will provide an update within 24 hours.",
-        auto_response => 1,
-        external_status_code => "060"
-    });
 
     $problem->comments->delete;
 
@@ -945,12 +1118,11 @@ subtest 'check that external_status_code triggers auto-responses' => sub {
         current_body => $bodies{2482},
     );
 
-    $update->process_body;
+    stderr_like { $update->process_body } qr/Couldn't determine update text for/, 'Error message displayed';
 
     $problem->discard_changes;
-    is $problem->comments->count, 1, 'one comment after fetching updates';
-
-    is $problem->comments->first->text, "Thank you for your report. We will provide an update within 24 hours.", "correct external status code on first comment";
+    is $problem->comments->count, 1, 'comment is still created after fetching updates';
+    is $problem->comments->first->state, 'hidden', '...but it is hidden';
 };
 
 foreach my $test ( {
@@ -1009,6 +1181,124 @@ foreach my $test ( {
     };
 }
 
+foreach my $test (
+    {
+        desc => 'check that new comment confirmed date greater than report sent date when originally the same',
+        dt1 => $dt,
+        dt2 => $dt
+    },
+    {
+        desc => 'check that new comment is not dated earlier than report sent date when originally earlier',
+        dt1 => $dt,
+        dt2 => $dt->subtract(seconds => 10)
+    }
+) {
+    subtest $test->{desc} => sub {
+        my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+        <service_requests_updates>
+        <request_update>
+        <update_id>638354</update_id>
+        <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+        <status>open</status>
+        <description>This is a different note</description>
+        <updated_datetime>UPDATED_DATETIME</updated_datetime>
+        </request_update>
+        </service_requests_updates>
+        };
+
+        $problem->state( 'confirmed' );
+
+        $problem->whensent( $test->{dt1} );
+        $problem->update;
+
+        $requests_xml =~ s/UPDATED_DATETIME/$test->{dt2}/;
+
+        my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+        Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+        my $update = Open311::GetServiceRequestUpdates->new(
+            system_user => $user,
+            current_open311 => $o,
+            current_body => $bodies{2482},
+        );
+
+        $update->process_body;
+
+        $problem->discard_changes;
+
+        is $problem->comments->count, 1, 'one comment after fetching updates';
+        my $comment = $problem->comments->first;
+        is $comment->confirmed, $problem->whensent->add( seconds => 1), 'Comment date a second after report date';
+        $problem->comments->delete;
+    };
+}
+
+foreach my $test (
+    {
+        desc => 'check that new comment confirmed date greater than auto-internal comment date when originally the same',
+        dt1 => $dt,
+        dt2 => $dt
+    },
+    {
+        desc => 'check that new comment is not dated earlier than auto-internal comment date when originally earlier',
+        dt1 => $dt,
+        dt2 => $dt->subtract(seconds => 10)
+    }
+) {
+    subtest $test->{desc} => sub {
+        my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+        <service_requests_updates>
+        <request_update>
+        <update_id>638354</update_id>
+        <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+        <status>open</status>
+        <description>This is a different note</description>
+        <updated_datetime>UPDATED_DATETIME</updated_datetime>
+        </request_update>
+        </service_requests_updates>
+        };
+
+        $problem->state( 'fixed - council' );
+        $problem->whensent( $test->{dt1} );
+
+        my $auto_comment = FixMyStreet::DB->resultset('Comment')->find_or_create( {
+            problem_state => 'fixed - council',
+            problem_id => $problem->id,
+            user_id    => $user->id,
+            name       => 'User',
+            text       => "Thank you. Your report has been fixed",
+            state      => 'confirmed',
+            confirmed  => 'now()',
+            external_id => 'auto-internal',
+        } );
+
+        $problem->update;
+        $auto_comment->confirmed($test->{dt1});
+
+        $requests_xml =~ s/UPDATED_DATETIME/$test->{dt2}/;
+
+        my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+        Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+        my $update = Open311::GetServiceRequestUpdates->new(
+            system_user => $user,
+            current_open311 => $o,
+            current_body => $bodies{2482},
+        );
+
+        $update->process_body;
+
+        $problem->discard_changes;
+
+        is $problem->comments->count, 2, 'two comment after fetching updates';
+
+        my @updates = $problem->comments->search(undef, { order_by => { -asc => 'created' } })->all;
+        is $updates[0]->external_id, 'auto-internal', "Automatic update is the earlier update";
+        is $updates[1]->created, $updates[0]->created->add( seconds => 1), "New update is one second later than automatic update";
+        $problem->comments->delete;
+    };
+}
+
 my $response_template_in_progress = $bodies{2482}->response_templates->create({
     title => "Acknowledgement 1",
     text => "Thank you for your report. We will provide an update within 48 hours.",
@@ -1054,6 +1344,7 @@ for my $test (
             title => "Acknowledgement 2",
             text => "Thank you for your report. We will provide an update within 24 hours.",
             auto_response => 1,
+            state => '',
             external_status_code => $test->{external_code}
         });
 
@@ -1086,6 +1377,124 @@ for my $test (
         $response_template->delete;
     };
 }
+$response_template_in_progress->delete;
+
+subtest 'check an email template does not match incorrectly' => sub {
+    my $email_template = $bodies{2482}->response_templates->create({
+        title => "Acknowledgement 1",
+        text => "An email template of some sort",
+        auto_response => 1,
+        external_status_code => 123,
+        state => "in progress"
+    });
+    my $response_template = $bodies{2482}->response_templates->create({
+        title => "Acknowledgement 2",
+        text => "A normal in progress response template",
+        auto_response => 1,
+        external_status_code => '',
+        state => "in progress"
+    });
+
+    my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>638344</update_id>
+    <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+    <status>in_progress</status>
+    <external_status_code>456</external_status_code>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+    $requests_xml =~ s/UPDATED_DATETIME/@{[$dt->clone->subtract( minutes => 62 )]}/;
+
+    my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+    Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+
+    $problem->state( 'confirmed' );
+    $problem->lastupdate( $dt->clone->subtract( hours => 1 ) );
+    $problem->update;
+
+    my $update = Open311::GetServiceRequestUpdates->new(
+        system_user => $user,
+        current_open311 => $o,
+        current_body => $bodies{2482},
+    );
+    $update->process_body;
+
+    $problem->discard_changes;
+    is $problem->comments->count, 1, 'one comment after fetching updates';
+    is $problem->state, 'in progress', 'correct problem status';
+    is $problem->comments->first->text, 'A normal in progress response template';
+
+    $problem->comments->delete;
+    $email_template->delete;
+    $response_template->delete;
+};
+
+subtest 'check any-category and certain category templates co-exist' => sub {
+    my $in_progress_template = $bodies{2482}->response_templates->create({
+        title => "Acknowledgement 1",
+        text => "An in progress template for all categories",
+        auto_response => 1,
+        state => "in progress"
+    });
+    my $in_progress_template_cat = $bodies{2482}->response_templates->create({
+        title => "Acknowledgement 2",
+        text => "An in progress template for one category",
+        auto_response => 1,
+        state => "in progress"
+    });
+    $in_progress_template_cat->contact_response_templates->find_or_create({
+        contact_id => $contact->id,
+    });
+
+    my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>
+    <service_requests_updates>
+    <request_update>
+    <update_id>638344</update_id>
+    <service_request_id>@{[ $problem->external_id ]}</service_request_id>
+    <status>in_progress</status>
+    <external_status_code>456</external_status_code>
+    <updated_datetime>UPDATED_DATETIME</updated_datetime>
+    </request_update>
+    </service_requests_updates>
+    };
+    $requests_xml =~ s/UPDATED_DATETIME/@{[$dt->clone->subtract( minutes => 62 )]}/;
+
+    my $o = Open311->new( jurisdiction => 'mysociety', endpoint => 'http://example.com' );
+    my $update = Open311::GetServiceRequestUpdates->new(
+        system_user => $user,
+        current_open311 => $o,
+        current_body => $bodies{2482},
+    );
+
+    for ({
+        category => $contact->category,
+        template => 'An in progress template for one category',
+    }, {
+        category => 'Other',
+        template => 'An in progress template for all categories',
+    }) {
+        Open311->_inject_response('/servicerequestupdates.xml', $requests_xml);
+        $problem->state( 'confirmed' );
+        $problem->lastupdate( $dt->clone->subtract( hours => 1 ) );
+        $problem->category($_->{category});
+        $problem->update;
+        $update->process_body;
+
+        $problem->discard_changes;
+        is $problem->comments->count, 1, 'one comment after fetching updates';
+        is $problem->state, 'in progress', 'correct problem status';
+        is $problem->comments->first->text, $_->{template};
+
+        $problem->comments->delete;
+    }
+
+    $in_progress_template->delete;
+    $in_progress_template_cat->contact_response_templates->delete;
+    $in_progress_template_cat->delete;
+};
 
 subtest 'check that first comment always updates state'  => sub {
     my $requests_xml = qq{<?xml version="1.0" encoding="utf-8"?>

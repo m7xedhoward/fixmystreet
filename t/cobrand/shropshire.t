@@ -9,7 +9,7 @@ use Open311::PopulateServiceList;
 
 my $mech = FixMyStreet::TestMech->new;
 
-my $body = $mech->create_body_ok(2238, 'Shropshire Council');
+my $body = $mech->create_body_ok(2238, 'Shropshire Council', {}, { cobrand => 'shropshire' });
 $mech->create_contact_ok(body_id => $body->id, category => 'Bridges', email => 'bridges@example.org');
 
 my ($report) = $mech->create_problems_for_body(1, $body->id, 'Test Report', {
@@ -168,6 +168,28 @@ subtest 'check open311_contact_meta_override' => sub {
     is $extra_fields[0][0]->{fieldtype}, 'date', "added fieldtype 'date' to 'Abandoned since'";
     is $extra_fields[0][0]->{required}, 'true', "set required to true";
     is $extra_fields[0][1]->{fieldtype}, undef, "not added fieldtype 'date' to 'Registration Mark'";
+};
+
+FixMyStreet::override_config {
+    MAPIT_URL => 'http://mapit.uk/',
+    ALLOWED_COBRANDS => 'shropshire',
+}, sub {
+    subtest 'Dashboard CSV adds column "Private" for "non_public" attribute' => sub {
+        my $staffuser = $mech->create_user_ok('counciluser@example.com', name => 'Council User',
+            from_body => $body, password => 'password');
+
+        $mech->log_in_ok( $staffuser->email );
+        my $report = FixMyStreet::DB->resultset("Problem")->search(undef, { order_by => { -desc => 'id' } })->first;
+        $report->non_public(1);
+        $report->update;
+        $mech->get_ok('/dashboard?export=1');
+        $mech->content_contains('"Reported As",Private');
+        $mech->content_contains('website,shropshire,,Yes');
+        $report->non_public(0);
+        $report->update;
+        $mech->get_ok('/dashboard?export=1');
+        $mech->content_contains('website,shropshire,,No');
+    };
 };
 
 done_testing();

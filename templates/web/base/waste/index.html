@@ -8,7 +8,10 @@
   [% IF property %]
     [% INCLUDE 'waste/_address_display.html' %]
   [% END %]
-<form class="waste" method="post">
+
+  [% IF form.intro_template %][% PROCESS "waste/${form.intro_template}" %][% END %]
+
+<form class="waste waste--[% form.current_page.name OR form.name %]" method="post">
   [% PROCESS form %]
 </form>
 

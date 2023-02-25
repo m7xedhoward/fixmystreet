@@ -50,7 +50,10 @@ sub next {
     my $self = shift;
     my $next = $self->current_page->next;
     if (ref $next eq 'CODE') {
-        $next = $next->($self->saved_data);
+        $next = $next->(
+            $self->saved_data,
+            $self->c->req->params,
+        );
     }
     return $next;
 }
@@ -65,7 +68,7 @@ sub build_active {
     }
 
     foreach my $page ( $self->all_pages ) {
-        foreach my $fname ( $page->all_fields ) {
+        foreach my $fname ( $page->all_fields_copy ) {
             my $field = $self->field($fname);
             $field->inactive(1) unless $active{$fname};
         }
@@ -108,8 +111,10 @@ after 'validate_form' => sub {
     my $self = shift;
 
     if ($self->validated) {
+        my $page = $self->current_page;
+
         # Mismatch of unique ID, resubmission?
-        if ($self->unique_id_session && $self->unique_id_session ne ($self->unique_id_form || '')) {
+        if ($self->unique_id_session && $page->check_unique_id && $self->unique_id_session ne ($self->unique_id_form || '')) {
             $self->add_form_error('You have already submitted this form.');
             return;
         }
@@ -123,8 +128,13 @@ after 'validate_form' => sub {
         $self->saved_data($saved_data);
         $self->field('saved_data')->_set_value($saved_data);
 
+        # A pre_finished lets a form pass validation but not actually finish
+        if ($page->pre_finished) {
+            my $success = $page->pre_finished->($self);
+            return unless $success;
+        }
+
         # And check to see if there is a function to call on the page
-        my $page = $self->current_page;
         if ($page->finished) {
             my $success = $page->finished->($self);
             if (!$success) {
@@ -136,6 +146,30 @@ after 'validate_form' => sub {
         }
     }
 };
+
+sub process_photo {
+    my ($form, $field) = @_;
+
+    my $saved_data = $form->saved_data;
+    my $fileid = $field . '_fileid';
+    my $c = $form->{c};
+    $c->stash->{photo_upload_prefix} = $field;
+    $c->stash->{photo_upload_fileid_field} = $fileid;
+    $c->forward('/photo/process_photo');
+    $saved_data->{$field} = $c->stash->{$fileid};
+    $saved_data->{$fileid} = '';
+}
+
+sub update_photo {
+    my ($form, $field, $fields) = @_;
+    my $saved_data = $form->saved_data;
+
+    if ($saved_data->{$field}) {
+        my $fileid = $field . '_fileid';
+        $saved_data->{$fileid} = $saved_data->{$field};
+        $fields->{$fileid} = { default => $saved_data->{$field} };
+    }
+}
 
 __PACKAGE__->meta->make_immutable;
 use namespace::autoclean;

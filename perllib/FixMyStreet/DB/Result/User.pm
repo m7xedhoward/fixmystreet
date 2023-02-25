@@ -263,7 +263,7 @@ sub latest_visible_problem {
         state => [ FixMyStreet::DB::Result::Problem->visible_states() ]
     }, {
         order_by => { -desc => 'id' }
-    })->single;
+    })->first;
 }
 
 =head2 check_for_errors
@@ -387,7 +387,7 @@ sub moderating_user_name {
 
     $belongs_to_body = $user->belongs_to_body( $bodies );
 
-Returns true if the user belongs to the comma seperated list of body ids passed in
+Returns true if the user belongs to the arrayref or comma seperated list of body ids passed in
 
 =cut
 
@@ -397,7 +397,8 @@ sub belongs_to_body {
 
     return 0 unless $bodies && $self->from_body;
 
-    my %bodies = map { $_ => 1 } split ',', $bodies;
+    $bodies = [ split ',', $bodies ] unless ref $bodies eq 'ARRAY';
+    my %bodies = map { $_ => 1 } @$bodies;
 
     return 1 if $bodies{ $self->from_body->id };
     return 0;
@@ -419,6 +420,14 @@ sub split_name {
     my ($first, $last) = $self->name =~ /^(\S*)(?: (.*))?$/;
 
     return { first => $first || '', last => $last || '' };
+}
+
+sub remove_staff {
+    my $self = shift;
+    $self->user_roles->delete;
+    $self->admin_user_body_permissions->delete;
+    $self->from_body(undef);
+    $self->area_ids(undef);
 }
 
 sub can_moderate {
@@ -481,7 +490,8 @@ sub permissions {
         return { map { %$_ } values %$perms };
     }
 
-    my $body_id = $problem->bodies_str;
+    my $body_id = $problem->bodies_str_ids;
+    $body_id = $cobrand->call_hook(permission_body_override => $body_id) || $body_id;
 
     return {} unless $self->belongs_to_body($body_id);
 
@@ -502,8 +512,9 @@ sub has_permission_to {
     return 1 if $self->is_superuser;
     return 0 if !$body_ids || (ref $body_ids eq 'ARRAY' && !@$body_ids);
     $body_ids = [ $body_ids ] unless ref $body_ids eq 'ARRAY';
-    my %body_ids = map { $_ => 1 } @$body_ids;
+    $body_ids = $cobrand->call_hook(permission_body_override => $body_ids) || $body_ids;
 
+    my %body_ids = map { $_ => 1 } @$body_ids;
     foreach (@{$self->body_permissions}) {
         return 1 if $_->{permission} eq $permission_type && $body_ids{$_->{body_id}};
     }
@@ -597,6 +608,7 @@ sub anonymize_account {
     $self->comments->update({ anonymous => 1, name => '' });
     $self->alerts->update({ whendisabled => \'current_timestamp' });
     $self->password('', 1);
+    $self->remove_staff;
     $self->update({
         email => 'removed-' . $self->id . '@' . FixMyStreet->config('EMAIL_DOMAIN'),
         email_verified => 0,
@@ -661,9 +673,18 @@ has categories => (
     lazy => 1,
     default => sub {
         my $self = shift;
-        return [] unless $self->get_extra_metadata('categories');
+
+        my @category_ids;
+        my $user_categories = $self->get_extra_metadata('categories');
+        push @category_ids, @$user_categories if scalar $user_categories;
+        foreach my $role ($self->roles) {
+            my $role_categories = $role->get_extra_metadata('categories');
+            push @category_ids, @$role_categories if scalar $role_categories;
+        }
+        return [] unless @category_ids;
+
         my @categories = $self->result_source->schema->resultset("Contact")->search({
-            id => $self->get_extra_metadata('categories'),
+            id => \@category_ids,
         }, {
             order_by => 'category',
         })->get_column('category')->all;

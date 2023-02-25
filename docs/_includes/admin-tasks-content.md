@@ -165,6 +165,14 @@ citizen’s experience](/pro-manual/citizens-experience/)'. Those with the appro
 the report-making interface, labeled ‘Report As’. Select either the council, ‘yourself’, ‘anonymous’ or
 ‘another user’.
 
+In order to reduce confusion for customer service staff, the email,
+name and phone number fields in the reporting and update pages are
+disabled for staff users. This avoids accidental overwriting of their
+own details with those of e.g. citizens making reports over the
+telephone in case staff forget to switch the ‘Report As’ control to
+‘another user’.
+
+
 If a user has the ‘Default to creating reports/update as the council’
 permission then the dropdown will default to reporting as the council.
 Staff with the ’Markup problem details’ permission will also default to
@@ -323,7 +331,7 @@ priority’ must be ticked</span>
 
 - You can click and drag a pin at any time to change the report’s specified location.
 - When viewing a report on the ground, staff with the appropriate permissions may click
-‘set to my current location’. This will reset the co-ordinates of the issue to reflect a more accurate placement. 
+‘set to my current location’. This will reset the co-ordinates of the issue to reflect a more accurate placement.
 
 </div>
 
@@ -446,9 +454,9 @@ they are in a practical order for your route or priorities.
 
 <span class="admin-task__permissions">Permissions required: User must be marked as staff and 'Assign problem reports to users' must be ticked.</span>
 
-Managers of teams of inspectors can assign reports to the shortlists of inspectors (i.e. staff with the 'Markup problem details' permission). The assignment dropdown appears when editing reports with the inspector tool.
+Managers of teams of inspectors can assign reports to the shortlists of inspectors (i.e. staff with the 'Markup problem details' permission). The assignment dropdown appears when editing reports with the inspector tool, but only if there are any users available to be assigned.
 
-Reports can also be assigned in bulk from the 'All reports' page, where inspector managers can see at a glance which reports are assigned to which inspectors, as well as which are unassigned.
+Reports can also be assigned in bulk from the 'All reports' page, where inspector managers can see at a glance which reports are assigned to which inspectors.
 
 Assigned users can also be viewed on the Reports list page in the Admin area, as well as when editing a report in that list by clicking its 'Edit' link.
 
@@ -456,7 +464,7 @@ Assigned users can also be viewed on the Reports list page in the Admin area, as
 
 <span class="admin-task__permissions">Permissions required: User must be marked as staff and 'Markup problem details' must be ticked.</span>
 
-In addition to seeing their own shortlist, inspectors can, like inspector managers, see which reports are assigned to other inspectors and which are unassigned both in the individual report webpage and in the 'All reports' list.
+In addition to seeing their own shortlist, inspectors can, like inspector managers, see which reports are assigned to other inspectors, both in the individual report webpage and in the 'All reports' list.
 
 #### Viewing navigation routes
 
@@ -507,8 +515,7 @@ First create the basic user account by inputting a name and email address, plus 
 details desired. Once this is done and you have saved the input, you can edit the account to assign
 any roles or permissions required.
 
-You can use the same form to create a user account for a resident or a member of staff, so tick
-‘staff user’ if you wish to create an admin account.
+The 'Staff' checkbox cannot be unchecked; this guarantees a new user will be a staff user, and will be automatically assigned to the correct body.
 
 The new staff user can then log in via the normal method.
 
@@ -549,6 +556,10 @@ The Administrator can allocate one or more categories of report (e.g. Potholes o
 maintenance) to a staff user by editing the user and checking the relevant category boxes. The
 staff user, when logged in, will then only see reports within those categories. This is useful where a
 staff user only deals with reports of a specific type.
+
+Roles can also have categories associated with them. This works in the same way as assigning categories
+to a user. You can assign categories to a role by editing the role and checking the relevant category
+boxes. Users will then only be able to see categories relevant to their role.
 
 #### Removing staff status from accounts
 
@@ -865,6 +876,12 @@ will automatically be added as a first update to any new report created that
 matches the template (ie. in the relevant category if assigned). This lets
 you give e.g. estimated timescales or other useful information up front.
 
+If you enter text in the ‘Text for email alert field’, the template text will update
+the report on the website and the email text will be sent to the user if they have
+opted into alerts.
+
+
+
 #### Editing or deleting a template
 
 Click on ‘Templates’ in the admin menu. You will see a table of existing templates. Click on ‘Edit’
@@ -958,7 +975,8 @@ particular date range:
 
 <span class="admin-task__permissions">Permissions required: User must be marked as staff and ‘Add/edit emergency message’ must be ticked.</span>
 
-This features allows you to set an emergency message which will be displayed on the homepage.
+This feature allows you to set emergency messages which will be displayed on
+the homepage or reporting pages; you can have different messages for in/out of hours.
 
 Certain HTML tags can be used for formatting purposes. These are limited to the same set as described
 in ["HTML content in notices"](#html-content-in-notices). You should not use block-level HTML elements
@@ -972,5 +990,12 @@ To clear the message simply delete any contents in the box.
 
 <img alt="An emergency message can be shown to users on the FixMyStreet homepage."
     src="/assets/img/pro-user-guide/emergency-message-example.png" class="admin-screenshot" />
+
+You can set the time periods that will count as out of hours on the same page. For example,
+if your out of hours were 6pm to 8am Monday to Friday, all day weekends and Bank Holidays,
+plus Christmas Eve, you would set it up as the following screenshot:
+
+<img alt="Saturday, Sunday, Bank Holidays, and a special Christmas Eve, 00:00-24:00; Monday to Friday 00:00-08:00 and 18:00-24:00."
+    src="/assets/img/pro-user-guide/emergency-message-time-periods.png" class="admin-screenshot">
 
 </div>

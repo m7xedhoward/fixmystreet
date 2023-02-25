@@ -31,7 +31,10 @@ sub load_form {
         $page = $c->forward('get_page');
     }
 
-    my $form = $self->form_class->new(
+    my $form_class = $c->stash->{form_class} || $self->form_class;
+    my $form = $form_class->new(
+        page_list => $c->stash->{page_list} || [],
+        $c->stash->{field_list} ? (field_list => $c->stash->{field_list}) : (),
         page_name => $page,
         csrf_token => $c->stash->{csrf_token},
         c => $c,
@@ -60,8 +63,11 @@ sub requires_sign_in : Private {
 sub form : Private {
     my ($self, $c) = @_;
 
+    $c->stash->{label_for_field} = \&label_for_field;
     $c->forward('pre_form');
 
+    # XXX This double form load means double API calls in
+    # Cobrand/Peterborough.pm, for example
     my $form = $self->load_form($c);
     if ($c->get_param('process') && !$c->stash->{override_no_process}) {
         # A claim form will quite possibly have people logging in part-way
@@ -80,8 +86,21 @@ sub form : Private {
 
     $form->process unless $form->processed;
 
-    $c->stash->{template} = $form->template || $self->index_template;
+    # If we have sent a confirmation email, that function will have
+    # set a template that we need to show
+    $c->stash->{template} = $c->stash->{override_template} || $form->template || $self->index_template
+        unless $c->stash->{sent_confirmation_message};
     $c->stash->{form} = $form;
+}
+
+sub label_for_field {
+    my ($form, $field, $key) = @_;
+    my $fn = 'options_' . $field;
+    my @options = $form->field($field)->options;
+    @options = $form->$fn if !@options && $form->can($fn);
+    foreach (@options) {
+        return $_->{label} if $_->{value} eq $key;
+    }
 }
 
 sub pre_form : Private {
@@ -93,12 +112,17 @@ sub get_page : Private {
 
     my $goto = $c->get_param('goto') || '';
     my $process = $c->get_param('process') || '';
-    $goto = 'intro' unless $goto || $process;
+    $goto = $self->first_page($c) unless $goto || $process;
     if ($goto && $process) {
         $c->detach('/page_error_400_bad_request', [ 'Bad request' ]);
     }
 
     return $goto || $process;
+}
+
+sub first_page {
+    my ($self, $c) = @_;
+    return $c->stash->{first_page} || 'intro';
 }
 
 __PACKAGE__->meta->make_immutable;

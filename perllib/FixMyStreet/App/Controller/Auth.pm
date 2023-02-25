@@ -496,6 +496,7 @@ sub common_password : Local : Args(0) {
 
     my $body = JSON->new->utf8->allow_nonref->encode($return);
     $c->res->content_type('application/json; charset=utf-8');
+    $c->forward('/set_app_cors_header');
     $c->res->body($body);
 }
 
@@ -585,6 +586,7 @@ sub ajax_sign_in : Path('ajax/sign_in') {
 
     my $body = encode_json($return);
     $c->res->content_type('application/json; charset=utf-8');
+    $c->forward('/set_app_cors_header');
     $c->res->body($body);
 
     return 1;
@@ -597,6 +599,7 @@ sub ajax_sign_out : Path('ajax/sign_out') {
 
     my $body = encode_json( { signed_out => 1 } );
     $c->res->content_type('application/json; charset=utf-8');
+    $c->forward('/set_app_cors_header');
     $c->res->body($body);
 
     return 1;
@@ -608,6 +611,12 @@ sub ajax_check_auth : Path('ajax/check_auth') {
     my $code = 401;
     my $data = { not_authorized => 1 };
 
+    # iOS app can't send cookies so instead sends email/password
+    # to check login status
+    if ( ( my $username = $c->get_param('username') ) && !$c->user ) {
+        $c->forward('sign_in', [ $username ]);
+    }
+
     if ( $c->user ) {
         $data = { name => $c->user->name };
         $code = 200;
@@ -615,6 +624,7 @@ sub ajax_check_auth : Path('ajax/check_auth') {
 
     my $body = encode_json($data);
     $c->res->content_type('application/json; charset=utf-8');
+    $c->forward('/set_app_cors_header');
     $c->res->code($code);
     $c->res->body($body);
 

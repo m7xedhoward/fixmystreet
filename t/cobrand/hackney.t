@@ -1,8 +1,10 @@
 use utf8;
 use CGI::Simple;
 use DateTime;
+use DateTime::Format::W3CDTF;
 use JSON::MaybeXS;
 use Test::MockModule;
+use Test::MockTime qw(:all);
 use FixMyStreet::TestMech;
 use Open311;
 use Open311::GetServiceRequests;
@@ -26,7 +28,7 @@ my $params = {
     can_be_devolved => 1,
 };
 
-my $hackney = $mech->create_body_ok(2508, 'Hackney Council', $params);
+my $hackney = $mech->create_body_ok(2508, 'Hackney Council', $params, { cobrand => 'hackney' });
 my $contact = $mech->create_contact_ok(
     body_id => $hackney->id,
     category => 'Potholes & stuff',
@@ -39,6 +41,30 @@ $contact->set_extra_fields( ( {
     variable => 'true',
     required => 'false',
     order => 1,
+    datatype_description => 'datatype',
+} ) );
+$contact->update;
+
+$contact = $mech->create_contact_ok(
+    body_id => $hackney->id,
+    category => 'Flytipping',
+    email => 'Environment-Flytipping',
+);
+$contact->set_extra_fields( ( {
+    code => 'flytip_size',
+    datatype => 'string',
+    description => 'Size of flytip?',
+    variable => 'true',
+    required => 'true',
+    order => 1,
+    datatype_description => 'datatype',
+}, {
+    code => 'flytip_type',
+    datatype => 'string',
+    description => 'Type of flytip?',
+    variable => 'true',
+    required => 'true',
+    order => 2,
     datatype_description => 'datatype',
 } ) );
 $contact->update;
@@ -118,6 +144,7 @@ subtest "check moderation label uses correct name" => sub {
 $_->delete for @reports;
 
 my $system_user = $mech->create_user_ok('system_user@example.org');
+my $dt = DateTime->now->set(hour => 13, minute => 0);
 
 my ($p) = $mech->create_problems_for_body(1, $hackney->id, '', { cobrand => 'hackney' });
 my $alert = FixMyStreet::DB->resultset('Alert')->create( {
@@ -125,6 +152,7 @@ my $alert = FixMyStreet::DB->resultset('Alert')->create( {
     alert_type => 'new_updates',
     user       => $user,
     cobrand    => 'hackney',
+    whensubscribed => $dt,
 } )->confirm;
 
 FixMyStreet::DB->resultset('Alert')->create( {
@@ -132,10 +160,11 @@ FixMyStreet::DB->resultset('Alert')->create( {
     alert_type => 'new_updates',
     user       => $phone_user,
     cobrand    => 'hackney',
+    whensubscribed => $dt,
 } )->confirm;
 
 subtest "sends branded alert emails" => sub {
-    $mech->create_comment_for_problem($p, $system_user, 'Other User', 'This is some update text', 'f', 'confirmed', undef);
+    $mech->create_comment_for_problem($p, $system_user, 'Other User', 'This is some update text', 'f', 'confirmed', undef, { confirmed => $dt });
     $mech->clear_emails_ok;
 
     my $mod_lwp = Test::MockModule->new('LWP::UserAgent');
@@ -163,7 +192,9 @@ subtest "sends branded alert emails" => sub {
     like $text_content, qr{Your report \($id\) has had an update; to view: http://hackney.example.org/report/$id\n\nTo stop: http://hackney.example.org/A/[A-Za-z0-9]+};
     my $email = $mech->get_email;
     ok $email, "got an email";
-    like $mech->get_text_body_from_email($email), qr/Hackney Council/, "emails are branded";
+    my $text = $mech->get_text_body_from_email($email);
+    like $text, qr/Hackney Council/, "emails are branded";
+    like $text, qr/\d\d:\d\d today/, "date is included";
 };
 
 
@@ -275,6 +306,9 @@ FixMyStreet::override_config {
     STAGING_FLAGS => { send_reports => 1 },
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => ['hackney', 'fixmystreet'],
+    COBRAND_FEATURES => { environment_extra_fields => {
+        hackney => [ 'flytip_size', 'flytip_type' ],
+    } },
 }, sub {
     subtest "special send handling" => sub {
         my $cbr = Test::MockModule->new('FixMyStreet::Cobrand::Hackney');
@@ -329,6 +363,57 @@ FixMyStreet::override_config {
             my $c = CGI::Simple->new($req->content);
             is $c->param('service_code'), 'OTHER';
         };
+    };
+
+    subtest "Environment extra fields put in description" => sub {
+        $mech->log_in_ok( $user->email );
+        set_fixed_time('2021-08-06T10:00:00Z');
+        $mech->get_ok("/");
+        $mech->submit_form_ok( { with_fields => { pc => 'E8 1DY', } },
+            "submit location" );
+
+
+        # click through to the report page
+        $mech->follow_link_ok( { text_regex => qr/skip this step/i, },
+            "follow 'skip this step' link" );
+
+        $mech->submit_form_ok(
+            {
+                with_fields => {
+                    title         => 'Test Report',
+                    detail        => 'Test report details.',
+                    name          => 'Joe Bloggs',
+                    category      => 'Flytipping',
+                }
+            },
+            "submit good details"
+        );
+        $mech->submit_form_ok(
+            {
+                with_fields => {
+                    flytip_type   => 'Rubble',
+                    flytip_size   => 'Lots',
+                }
+            },
+            "submit extra details"
+        );
+
+        FixMyStreet::Script::Reports::send();
+        my $req = Open311->test_req_used;
+        my $c = CGI::Simple->new($req->content);
+        is $c->param('service_code'), 'Environment-Flytipping';
+        my $expected_title = "Test Report
+
+Size of flytip?
+Lots
+
+Type of flytip?
+Rubble";
+        (my $c_title = $c->param('attribute[title]')) =~ s/\r\n/\n/g;
+        is $c_title, $expected_title;
+
+        my $p = FixMyStreet::DB->resultset("Problem")->search(undef, { order_by => { -desc => 'id' } })->first;
+        is $c->param('attribute[requested_datetime]'), DateTime::Format::W3CDTF->format_datetime($p->confirmed->set_nanosecond(0));
     };
 };
 

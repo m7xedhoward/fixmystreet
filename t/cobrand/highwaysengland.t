@@ -41,18 +41,23 @@ $r = $he->geocode_postcode('m1');
 ok $r->{error}, "searching for lowecase road only generates error";
 
 my $mech = FixMyStreet::TestMech->new;
-my $highways = $mech->create_body_ok(2234, 'National Highways', { send_method => 'Email::Highways' });
+my $highways = $mech->create_body_ok(164186, 'National Highways', { send_method => 'Email::Highways' }, { cobrand => 'highwaysengland' });
 
 $mech->create_contact_ok(email => 'highways@example.com', body_id => $highways->id, category => 'Pothole', group => 'National Highways');
 
 FixMyStreet::override_config {
-    ALLOWED_COBRANDS => 'highwaysengland',
+    ALLOWED_COBRANDS => [ 'highwaysengland', 'fixmystreet' ],
     MAPIT_URL => 'http://mapit.uk/',
     CONTACT_EMAIL => 'fixmystreet@example.org',
     COBRAND_FEATURES => {
         contact_email => { highwaysengland => 'highwaysengland@example.org' },
+        updates_allowed => {
+            highwaysengland => 'open',
+        },
     },
 }, sub {
+    ok $mech->host('highwaysengland.example.org');
+
     subtest "check where heard from saved" => sub {
         $mech->get_ok('/around');
         $mech->submit_form_ok( { with_fields => { pc => 'M1, J16', } }, "submit location" );
@@ -84,9 +89,53 @@ FixMyStreet::override_config {
         like $body, qr/Heard from: Facebook/, 'where hear included in email';
         like $body, qr/Road: M1/, 'road data included in email';
         like $body, qr/Area: Area 1/, 'area data included in email';
+        unlike $body, qr/Never retype another FixMyStreet report/, 'FMS not mentioned in email';
     };
 
-    my ($problem) = $mech->create_problems_for_body(1, $highways->id, 'Title');
+    subtest "check things redacted appropriately" => sub {
+        $mech->get_ok('/report/new?latitude=52.23025&longitude=-1.015826');
+        my $title = "Test Redact report from 07000 000000";
+        my $detail = 'Please could you email me on test@example.org or ring me on (01234) 567 890 or 07000 000000.';
+        $mech->submit_form_ok(
+            {
+                button => 'report_anonymously',
+                with_fields => {
+                    title => $title,
+                    detail => $detail,
+                    category => 'Pothole',
+                }
+            },
+            "submit details"
+        );
+        $mech->content_contains('Thank you');
+
+        my $report = FixMyStreet::DB->resultset("Problem")->search(undef, { order_by => { -desc => 'id' } })->first;
+        is $report->title, 'Test Redact report from [phone removed]';
+        is $report->detail, 'Please could you email me on [email removed] or ring me on [phone removed] or [phone removed].';
+
+        my ($history) = $report->moderation_history;
+        is $history->title, $title;
+        is $history->detail, $detail;
+
+        $report->delete;
+    };
+
+    subtest "Reports from FMS cobrand use correct branding in email" => sub {
+        my $report = FixMyStreet::DB->resultset("Problem")->first;
+        ok $report, "Found the report";
+        $report->whensent(undef);
+        $report->cobrand("fixmystreet");
+        $report->update;
+
+        $mech->clear_emails_ok;
+        FixMyStreet::Script::Reports::send();
+        $mech->email_count_is(1);
+        my $email = $mech->get_email;
+        my $body = $mech->get_text_body_from_email($email);
+        like $body, qr/Never retype another FixMyStreet report/, 'FMS template used for email';
+    };
+
+    my ($problem) = $mech->create_problems_for_body(1, $highways->id, 'Title', { created => '2021-11-30T12:34:56' });
     subtest "check anonymous display" => sub {
         $mech->get_ok('/report/' . $problem->id);
         $mech->content_lacks('Reported by Test User at');
@@ -108,7 +157,15 @@ FixMyStreet::override_config {
     subtest 'check not in a group' => sub {
         my $j = $mech->get_ok_json('/report/new/ajax?latitude=52.236251&longitude=-0.892052&w=1');
         is $j->{subcategories}, undef;
-    }
+    };
+
+    subtest 'Reports do not have update form' => sub {
+        $problem->state('fixed - council');
+        $problem->update;
+
+        $mech->get_ok('/report/' . $problem->id);
+        $mech->content_lacks('Provide an update');
+    };
 };
 
 subtest 'Dashboard CSV extra columns' => sub {

@@ -9,6 +9,7 @@ use Moo;
 use FixMyStreet;
 
 with 'FixMyStreet::Roles::SOAPIntegration';
+with 'FixMyStreet::Roles::ParallelAPI';
 
 has attr => ( is => 'ro', default => 'http://bartec-systems.com/' );
 has action => ( is => 'lazy', default => sub { $_[0]->attr . "/Service/" } );
@@ -56,6 +57,8 @@ has token => (
     },
 );
 
+has backend_type => ( is => 'ro', default => 'bartec' );
+
 sub call {
     my ($self, $method, @params) = @_;
 
@@ -81,6 +84,12 @@ sub Authenticate {
     );
     $res = $res->result;
     return $res;
+}
+
+sub Premises_Detail_Get {
+    my ($self, $uprn) = @_;
+    my $res = $self->call('Premises_Detail_Get', token => $self->token, UPRN => $uprn);
+    return $res->{Premises};
 }
 
 # Given a postcode, returns an arrayref of addresses
@@ -175,6 +184,46 @@ sub Premises_Get {
     return \@premises;
 }
 
+sub Premises_FutureWorkpacks_Get {
+    my ( $self, %args ) = @_;
+
+    my $res = $self->call(
+        'Premises_FutureWorkpacks_Get',
+        token    => $self->token,
+        UPRN     => $args{uprn},
+        DateFrom => $args{date_from},
+        DateTo   => $args{date_to},
+    );
+
+    # Already seem to be returned from Bartec in date ascending order, but
+    # we'll sort just in case
+    my $workpacks = force_arrayref( $res, 'Premises_FutureWorkPack' );
+    @$workpacks
+        = sort { $a->{WorkPackDate} cmp $b->{WorkPackDate} } @$workpacks;
+    return $workpacks;
+}
+
+sub WorkPacks_Get {
+    my ( $self, %args ) = @_;
+
+    my $res = $self->call(
+        'WorkPacks_Get',
+        token => $self->token,
+        Date  => {
+            MinimumDate => {
+                attr  => { xmlns => "http://www.bartec-systems.com" },
+                value => $args{date_from},
+            },
+            MaximumDate => {
+                attr  => { xmlns => "http://www.bartec-systems.com" },
+                value => $args{date_to},
+            },
+        },
+    );
+
+    return force_arrayref( $res, 'WorkPack' );
+}
+
 sub Jobs_Get {
     my ($self, $uprn) = @_;
 
@@ -198,8 +247,21 @@ sub Jobs_Get {
         },
     });
     my $jobs = force_arrayref($res, 'Jobs');
-    @$jobs = sort { $a->{ScheduledDate} cmp $b->{ScheduledDate} } map { $_->{Job} } @$jobs;
+    @$jobs = sort { $a->{ScheduledStart} cmp $b->{ScheduledStart} } map { $_->{Job} } @$jobs;
     return $jobs;
+}
+
+# TODO Merge with Jobs_Get() above
+sub Jobs_Get_for_workpack {
+    my ( $self, $workpack_id ) = @_;
+
+    my $res = $self->call(
+        'Jobs_Get',
+        token      => $self->token,
+        WorkPackID => $workpack_id,
+    );
+
+    return force_arrayref( $res, 'Jobs' );
 }
 
 sub Jobs_FeatureScheduleDates_Get {
@@ -212,7 +274,7 @@ sub Jobs_FeatureScheduleDates_Get {
     my $days_buffer = 15;
 
     $start = $w3c->format_datetime($start || DateTime->now->subtract(days => $days_buffer));
-    $end = $w3c->format_datetime($end || DateTime->now);
+    $end = $w3c->format_datetime($end || DateTime->now->add(days => $days_buffer));
 
     my $res = $self->call('Jobs_FeatureScheduleDates_Get', token => $self->token, UPRN => $uprn, DateRange => {
         MinimumDate => {
@@ -224,7 +286,31 @@ sub Jobs_FeatureScheduleDates_Get {
             value => $end,
         },
     });
-    return force_arrayref($res, 'Jobs_FeatureScheduleDates');
+    my $data = force_arrayref($res, 'Jobs_FeatureScheduleDates');
+
+    # The data may contain multiple schedules for the same JobName because one
+    # is ending and another starting, so one will lack a NextDate (represented
+    # as a 1900 timestamp), the other a PreviousDate; or an old ended schedule
+    # may still be present. Loop through and work out the closest previous and
+    # next dates to use.
+    my (%min_next, %max_last);
+    my $out;
+    foreach (@$data) {
+        my $name = $_->{JobName};
+        my $last = $_->{PreviousDate};
+        my $next = $_->{NextDate};
+        $last = undef if $last lt '2000';
+        $next = undef if $next lt '2000';
+        $min_next{$name} = $next if $next && (!defined($min_next{$name}) || $min_next{$name} gt $next);
+        $max_last{$name} = $last if $last && (!defined($max_last{$name}) || $max_last{$name} lt $last);
+        $out->{$name} = {
+            %$_,
+            PreviousDate => $max_last{$name},
+            NextDate => $min_next{$name},
+        };
+    }
+
+    return [ values %$out ];
 }
 
 sub Features_Schedules_Get {
@@ -249,6 +335,42 @@ sub Premises_Attributes_Get {
     return force_arrayref($attributes, 'Attribute');
 }
 
+sub Premises_AttributeDefinitions_Get {
+    my $self = shift;
+    my $attr_def = $self->call( 'Premises_AttributeDefinitions_Get',
+        token => $self->token );
+    return force_arrayref($attr_def, 'AttributeDefinition');
+}
+
+sub Premises_Attributes_Delete {
+    my ($self, $uprn, $attr_id) = @_;
+    # XXX Return any errors
+    $self->call(
+        'Premises_Attributes_Delete',
+        token       => $self->token,
+        UPRN        => $uprn,
+        AttributeID => $attr_id,
+    );
+}
+
+sub delete_premise_attribute {
+    my ( $self, $uprn, $attr_name ) = @_;
+
+    my $attr_def = $self->Premises_AttributeDefinitions_Get();
+
+    my $attr_id;
+    for my $attribute (@$attr_def) {
+        if ( $attribute->{Name} eq $attr_name ) {
+            $attr_id = $attribute->{ID};
+            last;
+        }
+    }
+
+    if ($attr_id) {
+        $self->Premises_Attributes_Delete($uprn, $attr_id);
+    }
+}
+
 sub Premises_Events_Get {
     my ($self, $uprn) = @_;
 
@@ -271,6 +393,18 @@ sub Streets_Events_Get {
     my $events = $self->call('Streets_Events_Get',
         token => $self->token, USRN => $usrn, StartDate => $from->iso8601 );
     return force_arrayref($events, 'Event');
+}
+
+sub Features_Types_Get {
+    my ($self) = @_;
+    # This expensive operation doesn't take any params so may as well cache it
+    my $key = "peterborough:bartec:Features_Types_Get";
+    my $types = Memcached::get($key);
+    unless ($types) {
+        $types = force_arrayref($self->call('Features_Types_Get', token => $self->token), 'FeatureType');
+        Memcached::set($key, $types, 60*30);
+    }
+    return $types;
 }
 
 1;

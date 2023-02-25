@@ -5,7 +5,7 @@ use Path::Class;
 my $mech = FixMyStreet::TestMech->new;
 
 my $brum = $mech->create_body_ok(2514, 'Birmingham City Council');
-my $oxon = $mech->create_body_ok(2237, 'Oxfordshire County Council', { can_be_devolved => 1 } );
+my $oxon = $mech->create_body_ok(2237, 'Oxfordshire County Council', { can_be_devolved => 1 }, { cobrand => 'oxfordshire' } );
 my $contact = $mech->create_contact_ok( body_id => $oxon->id, category => 'Cows', email => 'cows@example.net' );
 my $contact2 = $mech->create_contact_ok( body_id => $oxon->id, category => 'Sheep', email => 'SHEEP', send_method => 'Open311' );
 my $contact3 = $mech->create_contact_ok( body_id => $oxon->id, category => 'Badgers & Voles', email => 'badgers@example.net' );
@@ -639,7 +639,13 @@ FixMyStreet::override_config {
     MAPIT_URL => 'http://mapit.uk/',
     ALLOWED_COBRANDS => 'oxfordshire',
 }, sub {
+    my $ex_employee = $mech->create_user_ok('exemployee@example.com', name => 'Ex Employee', from_body => $oxon);
+    $ex_employee->user_body_permissions->create({ body => $oxon, permission_type => 'report_inspect' });
+    $ex_employee->user_body_permissions->create({ body => $oxon, permission_type => 'planned_reports' });
+    my $ex_employee_id = $ex_employee->id;
+
     my $ian = $mech->create_user_ok('inspector@example.com', name => 'Inspector Ian', from_body => $oxon);
+
     $user->user_body_permissions->create({ body => $oxon, permission_type => 'assign_report_to_user' });
     $user->user_body_permissions->create({ body => $oxon, permission_type => 'planned_reports' });
     $user->update;
@@ -647,8 +653,35 @@ FixMyStreet::override_config {
     $ian->user_body_permissions->create({ body => $oxon, permission_type => 'planned_reports' });
     $ian->update;
 
+
+    my $role_a = FixMyStreet::DB->resultset("Role")->create({
+    body => $oxon,
+    name => 'Role A',
+    permissions => ['report_inspect', 'planned_reports'],
+    });
+
+    my $role_b = FixMyStreet::DB->resultset("Role")->create({
+    body => $oxon,
+    name => 'Role Z',
+    permissions => ['report_inspect', 'planned_reports'],
+    });
+
+    $ian->add_to_roles($role_a);
+    $ian->add_to_roles($role_b);
+    $ex_employee->add_to_roles($role_a);
+    $ex_employee->add_to_roles($role_b);
+
+    $ex_employee->anonymize_account;
+    $ex_employee->update;
+
     subtest "assign report by dropdown in report page" => sub {
         $mech->get_ok("/report/$report_id");
+
+        my @ians = $mech->content =~ /Inspector Ian/g;
+        is @ians, 1, "Inspector should only be in dropdown once regardless of multiple permission assignment";
+
+        $mech->content_lacks("option value='$ex_employee_id'", "Anonymised ex-staff do not appear in dropdown");
+
         $mech->content_contains('Assign to:');
         $mech->content_contains('<select class="form-control" name="assignment" id="assignment">');
 
@@ -658,7 +691,17 @@ FixMyStreet::override_config {
 
         $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => $ian->id } });
         $mech->content_contains('Shortlisted by Inspector Ian');
+
+        $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => 'unassigned' } });
+        $mech->get_ok("/report/$report_id");
+        $mech->content_lacks('Shortlisted by', 'Unassignment of user who did not raise report works');
+
+        # Reassign in prep for following tests
+        $mech->submit_form_ok({ button => 'save', with_fields => { include_update => 0, assignment => $ian->id } });
     };
+
+    $ian->remove_from_roles($role_a);
+    $ian->remove_from_roles($role_b);
 
     subtest "reports list shows assignees' names" => sub {
         $mech->get_ok("/reports");
@@ -675,12 +718,13 @@ FixMyStreet::override_config {
             $mech->click();
             $mech->get_ok("/reports");
             $root = HTML::TreeBuilder->new_from_content($mech->content());
-            @assigned_to = $root->find("li#report-$report_id div.assigned-to span.assignee")->content_list;
+            my $elem = $root->find("li#report-$report_id div.assigned-to span.assignee");
+            @assigned_to = $elem ? $elem->content_list : ();
         };
         $toggle_shortlist->();
         like($assigned_to[0], qr/Body User/, 'assignment by shortlist-add button still works' );
         $toggle_shortlist->();
-        like($assigned_to[0], qr/unassigned/, 'unassignment by shortlist-remove button still works' );
+        is($assigned_to[0], undef, 'unassignment by shortlist-remove button still works' );
     };
     $user->user_body_permissions->delete;
 };
@@ -955,6 +999,27 @@ FixMyStreet::override_config {
         $mech->content_lacks('shortlist');
         $contact2->unset_extra_metadata('assigned_users_only');
         $contact2->update;
+
+        # Now add user to a role with a category of "Sheep".
+        # User should then be able to see staff things on 2 and 3.
+        $user->set_extra_metadata(assigned_categories_only => 1);
+        $user->update;
+        my $role = $user->roles->create({
+            body => $oxon,
+            name => 'Role B',
+            permissions => ['moderate', 'planned_reports'],
+        });
+        $role->set_extra_metadata('categories', [$contact2->id]);
+        $role->update;
+        $user->add_to_roles($role);
+        $mech->get_ok("/report/$report2_id");
+        $mech->content_contains('<select class="form-control" name="state"  id="state">');
+        $mech->content_contains('<div class="inspect-section">');
+        $mech->get_ok("/report/$report3_id");
+        $mech->content_contains('<select class="form-control" name="state"  id="state">');
+        $mech->content_contains('<div class="inspect-section">');
+        $user->unset_extra_metadata('assigned_categories_only');
+        $user->update;
     };
 
     subtest 'instruct defect' => sub {

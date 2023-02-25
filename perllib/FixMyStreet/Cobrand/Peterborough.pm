@@ -4,8 +4,12 @@ use parent 'FixMyStreet::Cobrand::Whitelabel';
 use utf8;
 use strict;
 use warnings;
+use DateTime;
+use DateTime::Format::Strptime;
 use Integrations::Bartec;
+use List::Util qw(any);
 use Sort::Key::Natural qw(natkeysort_inplace);
+use FixMyStreet::Email;
 use FixMyStreet::WorkingDays;
 use Utils;
 
@@ -13,6 +17,7 @@ use Moo;
 with 'FixMyStreet::Roles::ConfirmOpen311';
 with 'FixMyStreet::Roles::ConfirmValidation';
 with 'FixMyStreet::Roles::Open311Multi';
+with 'FixMyStreet::Roles::SCP';
 
 sub council_area_id { 2566 }
 sub council_area { 'Peterborough' }
@@ -23,6 +28,30 @@ sub default_map_zoom { 5 }
 sub send_questionnaires { 0 }
 
 sub max_title_length { 50 }
+
+sub service_name_override {
+    return {
+        "Empty Bin 240L Black"      => "Black Bin",
+        "Empty Bin 240L Brown"      => "Brown Bin",
+        "Empty Bin 240L Green"      => "Green Bin",
+        "Empty Black 240l Bin"      => "Black Bin",
+        "Empty Brown 240l Bin"      => "Brown Bin",
+        "Empty Green 240l Bin"      => "Green Bin",
+        "Empty Bin Recycling 1100l" => "Recycling Bin",
+        "Empty Bin Recycling 240l"  => "Recycling Bin",
+        "Empty Bin Recycling 660l"  => "Recycling Bin",
+        "Empty Bin Refuse 1100l"    => "Refuse",
+        "Empty Bin Refuse 240l"     => "Refuse",
+        "Empty Bin Refuse 660l"     => "Refuse",
+    };
+}
+
+# XXX Use config to set max daily slots etc.
+sub bulky_collection_window_days     {90}
+sub max_bulky_collection_dates       {4}
+sub bulky_workpack_name {
+    qr/Waste-(BULKY WASTE|WHITES)-(?<date_suffix>\d{6})/;
+}
 
 sub disambiguate_location {
     my $self    = shift;
@@ -88,21 +117,13 @@ sub open311_extra_data_exclude {
 
 sub lookup_site_code_config { {
     buffer => 50, # metres
-    url => "https://tilma.mysociety.org/mapserver/peterborough",
-    srsname => "urn:ogc:def:crs:EPSG::27700",
-    typename => "highways",
-    property => "Usrn",
+    url => 'https://peterborough.assets/7/query?',
+    type => 'arcgis',
+    outFields => 'USRN',
+    property => "USRN",
     accept_feature => sub { 1 },
     accept_types => { Polygon => 1 },
 } }
-
-# We want to send confirmation emails only for Waste reports
-sub report_sent_confirmation_email {
-    my ($self, $report) = @_;
-    my $contact = $report->contact or return;
-    return 'id' if $report->contact->get_extra_metadata('waste_only');
-    return '';
-}
 
 sub open311_munge_update_params {
     my ($self, $params, $comment, $body) = @_;
@@ -152,7 +173,7 @@ sub get_body_sender {
         my $features = $self->_fetch_features(
             {
                 type => 'arcgis',
-                url => 'https://peterborough.assets/2/query?',
+                url => 'https://peterborough.assets/4/query?',
                 buffer => 1,
             },
             $x,
@@ -180,12 +201,8 @@ sub get_body_sender {
                 my $road_features = $self->_fetch_features(
                     {
                         buffer => 1, # metres
-                        url => "https://tilma.mysociety.org/mapserver/peterborough",
-                        srsname => "urn:ogc:def:crs:EPSG::27700",
-                        typename => "highways",
-                        property => "Usrn",
-                        accept_feature => sub { 1 },
-                        accept_types => { Polygon => 1 },
+                        type => 'arcgis',
+                        url => 'https://peterborough.assets/7/query?',
                     },
                     $x,
                     $y,
@@ -289,6 +306,7 @@ sub _fetch_features_url {
             outSR => 3857,
             f => "geojson",
             geometry => $cfg->{bbox},
+            outFields => $cfg->{outFields},
         );
         return URI->new(
             'https://tilma.mysociety.org/resource-proxy/proxy.php?' .
@@ -385,36 +403,7 @@ sub category_change_force_resend {
 
 Functions specific to the waste product & Bartec integration.
 
-=cut 
-
-=head2 munge_around_category_where, munge_reports_category_list, munge_report_new_contacts
-
-These filter out waste-related categories from the main FMS report flow.
-TODO: Are these small enough to be here or should they be in a Role?
-
-=cut 
-
-sub munge_around_category_where {
-    my ($self, $where) = @_;
-    $where->{extra} = [ undef, { -not_like => '%T10:waste_only,I1:1%' } ];
-}
-
-sub munge_reports_category_list {
-    my ($self, $categories) = @_;
-    @$categories = grep { !$_->get_extra_metadata('waste_only') } @$categories;
-}
-
-sub munge_report_new_contacts {
-    my ($self, $categories) = @_;
-
-    if ($self->{c}->action =~ /^waste/) {
-        @$categories = grep { $_->get_extra_metadata('waste_only') } @$categories;
-        return;
-    }
-
-    @$categories = grep { !$_->get_extra_metadata('waste_only') } @$categories;
-    $self->SUPER::munge_report_new_contacts($categories);
-}
+=cut
 
 sub _premises_for_postcode {
     my $self = shift;
@@ -453,6 +442,28 @@ sub clear_cached_lookups_postcode {
     delete $self->{c}->session->{$key};
 }
 
+sub clear_cached_lookups_property {
+    my ($self, $uprn) = @_;
+
+    # might be prefixed with postcode if it's come straight from the URL
+    $uprn =~ s/^.+\://g;
+
+    foreach ( qw/look_up_property bin_services_for_address/ ) {
+        delete $self->{c}->session->{"peterborough:bartec:$_:$uprn"};
+    }
+
+    $self->clear_cached_lookups_bulky_slots($uprn);
+}
+
+sub clear_cached_lookups_bulky_slots {
+    my ($self, $uprn) = @_;
+
+    for (qw/earlier later/) {
+        delete $self->{c}
+            ->session->{"peterborough:bartec:available_bulky_slots:$_:$uprn"};
+    }
+}
+
 sub bin_addresses_for_postcode {
     my $self = shift;
     my $pc = shift;
@@ -483,45 +494,397 @@ sub look_up_property {
     my $self = shift;
     my $id = shift;
 
+    return unless $id;
+
     my ($pc, $uprn) = split ":", $id;
 
     my $premises = $self->_premises_for_postcode($pc);
 
     my %premises = map { $_->{uprn} => $_ } @$premises;
 
+    $premises{$uprn}{pending_bulky_collection}
+        = $self->find_pending_bulky_collection( $premises{$uprn} );
+
     return $premises{$uprn};
 }
 
-sub image_for_service {
-    my ($self, $service_id) = @_;
-    my $base = '/cobrands/peterborough/images';
+# Should only be a single open collection for a given property, but in case
+# there isn't, return the most recent
+sub find_pending_bulky_collection {
+    my ( $self, $property ) = @_;
+
+    return FixMyStreet::DB->resultset('Problem')->to_body( $self->body )
+        ->find(
+        {   category => 'Bulky collection',
+            extra    => {
+                      like => '%T4:uprn,T5:value,I'
+                    . length( $property->{uprn} ) . ':'
+                    . $property->{uprn} . '%',
+            },
+            state =>
+                { '=', [ FixMyStreet::DB::Result::Problem->open_states ] },
+        },
+        { order_by => { -desc => 'id' } },
+        );
+}
+
+sub bulky_can_view_collection {
+    my ( $self, $p ) = @_;
+
+    my $c = $self->{c};
+
+    # logged out users can't see anything
+    return unless $p && $c->user_exists;
+
+    # superusers and staff can see it
+    # XXX do we want a permission for this?
+    return 1 if $c->user->is_superuser || $c->user->belongs_to_body($self->body->id);
+
+    # otherwise only the person who booked the collection can view
+    return $c->user->id == $p->user_id;
+}
+
+sub bulky_can_view_cancellation {
+    my ( $self, $p ) = @_;
+
+    my $c = $self->{c};
+
+    return unless $p && $c->user_exists;
+
+    # Staff only
+    # XXX do we want a permission for this?
+    return 1
+        if $c->user->is_superuser
+        || $c->user->belongs_to_body( $self->body->id );
+}
+
+sub image_for_unit {
+    my ($self, $unit) = @_;
+    my $service_id = $unit->{service_id};
+    my $base = '/i/waste-containers';
     my $images = {
-        6533 => "$base/black-bin",
-        6534 => "$base/green-bin",
-        6579 => "$base/brown-bin",
+        6533 => "$base/bin-black",
+        6534 => "$base/bin-green",
+        6579 => "$base/bin-brown",
     };
     return $images->{$service_id};
 }
 
+# XXX
+# Error handling
+# Holidays, bank holidays?
+# Monday limit, Tuesday limit etc.?
+# Check which bulky collections are pending, open
+sub find_available_bulky_slots {
+    my ( $self, $property, $last_earlier_date_str ) = @_;
+
+    my $key
+        = 'peterborough:bartec:available_bulky_slots:'
+        . ( $last_earlier_date_str ? 'later' : 'earlier' ) . ':'
+        . $property->{uprn};
+    return $self->{c}->session->{$key} if $self->{c}->session->{$key};
+
+    my $bartec = $self->feature('bartec');
+    $bartec = Integrations::Bartec->new(%$bartec);
+
+    my $window = _bulky_collection_window($last_earlier_date_str);
+    if ( $window->{error} ) {
+        # XXX Handle error gracefully
+        die $window->{error};
+    }
+    my $workpacks = $bartec->Premises_FutureWorkpacks_Get(
+        date_from => $window->{date_from},
+        date_to   => $window->{date_to},
+        uprn      => $property->{uprn},
+    );
+
+    my @available_slots;
+
+    my $last_workpack_date;
+    for my $workpack (@$workpacks) {
+        # Depending on the Collective API version (R1531 or R1611),
+        # $workpack->{Actions} can be an arrayref or a hashref.
+        # If a hashref, it may be an action structure of the form
+        # { 'ActionName' => ... },
+        # or it may have the key {Action}.
+        # $workpack->{Actions}{Action} can also be an arrayref or hashref.
+        # From this variety of structures, we want to get an arrayref of
+        # action hashrefs of the form [ { 'ActionName' => ... }, {...} ].
+        my $action_data = $workpack->{Actions};
+        if ( ref $action_data eq 'HASH' ) {
+            if ( exists $action_data->{Action} ) {
+                $action_data = $action_data->{Action};
+                $action_data = [$action_data] if ref $action_data eq 'HASH';
+            } else {
+                $action_data = [$action_data];
+            }
+        }
+
+        my %action_hash = map {
+            my $action_name = $_->{ActionName} // '';
+            $action_name = service_name_override()->{$action_name}
+                // $action_name;
+
+            $action_name => $_;
+        } @$action_data;
+
+        # We only want dates that coincide with black bin collections
+        next if !exists $action_hash{'Black Bin'};
+
+        # This case shouldn't occur, but in case there are multiple black bin
+        # workpacks for the same date, we only take the first into account
+        next if $workpack->{WorkPackDate} eq ( $last_workpack_date // '' );
+
+        # Only include if max jobs not already reached
+        push @available_slots => {
+            workpack_id => $workpack->{id},
+            date        => $workpack->{WorkPackDate},
+            }
+            if $self->check_bulky_slot_available( $workpack->{WorkPackDate},
+            $bartec );
+
+        $last_workpack_date = $workpack->{WorkPackDate};
+
+        # Provision of $last_earlier_date_str implies we want to fetch all
+        # remaining available slots in the given window, so we ignore the
+        # limit
+        last
+            if !$last_earlier_date_str
+            && @available_slots == max_bulky_collection_dates();
+    }
+
+    $self->{c}->session->{$key} = \@available_slots;
+
+    return \@available_slots;
+}
+
+# Checks if there is a slot available for a given date
+sub check_bulky_slot_available {
+    my ( $self, $date, $bartec ) = @_;
+
+    unless ($bartec) {
+        $bartec = $self->feature('bartec');
+        $bartec = Integrations::Bartec->new(%$bartec);
+    }
+
+    my $suffix_date_parser = DateTime::Format::Strptime->new( pattern => '%d%m%y' );
+    my $workpack_date_pattern = '%FT%T';
+    my $workpack_dt
+        = DateTime::Format::Strptime->new( pattern => $workpack_date_pattern )
+        ->parse_datetime($date);
+    next unless $workpack_dt;
+
+    my $date_from
+        = $workpack_dt->clone->set( hour => 0, minute => 0, second => 0 )
+        ->strftime($workpack_date_pattern);
+    my $date_to = $workpack_dt->clone->set(
+        hour   => 23,
+        minute => 59,
+        second => 59,
+    )->strftime($workpack_date_pattern);
+    my $workpacks_for_day = $bartec->WorkPacks_Get(
+        date_from => $date_from,
+        date_to   => $date_to,
+    );
+
+    my %jobs_per_uprn;
+    for my $wpfd (@$workpacks_for_day) {
+        next if $wpfd->{Name} !~ bulky_workpack_name();
+
+        # Ignore workpacks with names with faulty date suffixes
+        my $suffix_dt = $suffix_date_parser->parse_datetime( $+{date_suffix} );
+
+        next
+            if !$suffix_dt
+            || $workpack_dt->date ne $suffix_dt->date;
+
+        my $jobs = $bartec->Jobs_Get_for_workpack( $wpfd->{ID} ) || [];
+
+        # Group jobs by UPRN. For a bulky workpack, a UPRN/premises may
+        # have multiple jobs (equivalent to item slots); these all count
+        # as a single bulky collection slot.
+        $jobs_per_uprn{ $_->{Job}{UPRN} }++ for @$jobs;
+    }
+
+    my $total_collection_slots = keys %jobs_per_uprn;
+
+    return $total_collection_slots < $self->bulky_daily_slots;
+}
+
+sub _bulky_collection_window {
+    my $last_earlier_date_str = shift;
+    my $fmt = '%F';
+
+    my $now = DateTime->now( time_zone => FixMyStreet->local_time_zone );
+    my $tomorrow = $now->clone->truncate( to => 'day' )->add( days => 1 );
+
+    my $start_date;
+    if ($last_earlier_date_str) {
+        $start_date
+            = DateTime::Format::Strptime->new( pattern => $fmt )
+            ->parse_datetime($last_earlier_date_str);
+
+        return { error => 'Invalid date provided' } unless $start_date;
+
+        $start_date->add( days => 1 );
+    } else {
+        $start_date = $tomorrow->clone;
+        # Can only book the next day up to 3pm
+        if ($now->hour >= 15) {
+            $start_date->add( days => 1 );
+        }
+    }
+
+    my $date_to
+        = $tomorrow->clone->add( days => bulky_collection_window_days() );
+
+    return {
+        date_from => $start_date->strftime($fmt),
+        date_to => $date_to->strftime($fmt),
+    };
+}
+
+has wasteworks_config => (
+    is => 'lazy',
+    default => sub { $_[0]->body->get_extra_metadata( 'wasteworks_config', {} ) },
+);
+
+sub bulky_items_master_list { $_[0]->wasteworks_config->{item_list} || [] }
+sub bulky_items_maximum { $_[0]->wasteworks_config->{items_per_collection_max} || 5 }
+sub bulky_daily_slots { $_[0]->wasteworks_config->{daily_slots} || 40 }
+
+sub bulky_per_item_costs {
+    my $self = shift;
+    my $cfg  = $self->body->get_extra_metadata( 'wasteworks_config', {} );
+    return $cfg->{per_item_costs};
+}
+
+sub bulky_can_cancel_collection {
+    # There is an $ignore_external_id option because we display some
+    # cancellation messaging without needing a report in Bartec
+    my ( $self, $collection, $ignore_external_id ) = @_;
+
+    return
+           $collection
+        && $collection->is_open
+        && ( $collection->external_id || $ignore_external_id )
+        && $self->bulky_can_view_collection($collection)
+        && $self->within_bulky_cancel_window($collection);
+}
+
+sub bulky_cancellation_report {
+    my ( $self, $collection ) = @_;
+
+    return unless $collection && $collection->external_id;
+
+    my $original_sr_number = $collection->external_id =~ s/Bartec-//r;
+
+    # A cancelled collection will have a corresponding cancellation report
+    # linked via external_id / ORIGINAL_SR_NUMBER
+    return FixMyStreet::DB->resultset('Problem')->find(
+        {   extra => {
+                      like => '%T18:ORIGINAL_SR_NUMBER,T5:value,T'
+                    . length($original_sr_number) . ':'
+                    . $original_sr_number . '%',
+            },
+        },
+    );
+}
+
+sub bulky_can_refund {
+    my $self = shift;
+    my $c    = $self->{c};
+
+    # Skip refund eligibility check for bulky goods soft launch; just
+    # assume if a collection can be cancelled, it can be refunded
+    # (see https://3.basecamp.com/4020879/buckets/26662378/todos/5870058641)
+    return $self->within_bulky_cancel_window
+        if $self->bulky_enabled_staff_only;
+
+    return $c->stash->{property}{pending_bulky_collection}
+        ->get_extra_field_value('CHARGEABLE') ne 'FREE'
+        && $self->within_bulky_refund_window;
+}
+
+# Collections are scheduled to begin at 06:45 each day.
+# A cancellation made less than 24 hours before the collection is scheduled to
+# begin is not entitled to a refund.
+sub within_bulky_refund_window {
+    my $self = shift;
+    my $c    = $self->{c};
+
+    my $open_collection = $c->stash->{property}{pending_bulky_collection};
+    return 0 unless $open_collection;
+
+    my $now_dt = DateTime->now( time_zone => FixMyStreet->local_time_zone );
+
+    my $collection_date_str = $open_collection->get_extra_field_value('DATE');
+    my $collection_dt       = DateTime::Format::Strptime->new(
+        pattern   => '%FT%T',
+        time_zone => FixMyStreet->local_time_zone,
+    )->parse_datetime($collection_date_str);
+
+    return $self->_check_within_bulky_refund_window( $now_dt,
+        $collection_dt );
+}
+
+sub _check_within_bulky_refund_window {
+    my ( undef, $now_dt, $collection_dt ) = @_;
+
+    my $cutoff_dt = $collection_dt->clone->set( hour => 6, minute => 45 )
+        ->subtract( hours => 24 );
+
+    return $now_dt <= $cutoff_dt;
+}
+
+sub within_bulky_cancel_window {
+    my ( $self, $collection ) = @_;
+
+    my $c = $self->{c};
+    $collection //= $c->stash->{property}{pending_bulky_collection};
+    return 0 unless $collection;
+
+    my $now_dt = DateTime->now( time_zone => FixMyStreet->local_time_zone );
+
+    my $collection_date_str = $collection->get_extra_field_value('DATE');
+    my $collection_dt       = DateTime::Format::Strptime->new(
+        pattern   => '%FT%T',
+        time_zone => FixMyStreet->local_time_zone,
+    )->parse_datetime($collection_date_str);
+
+    return $self->_check_within_bulky_cancel_window( $now_dt,
+        $collection_dt );
+}
+
+sub _check_within_bulky_cancel_window {
+    my ( undef, $now_dt, $collection_dt ) = @_;
+
+    # 23:55 day before collection
+    my $cutoff_dt = $collection_dt->clone->subtract( minutes => 5 );
+    return $now_dt < $cutoff_dt;
+}
+
+sub unset_free_bulky_used {
+    my $self = shift;
+
+    my $c = $self->{c};
+
+    return
+        unless $c->stash->{property}{pending_bulky_collection}
+        ->get_extra_field_value('CHARGEABLE') eq 'FREE';
+
+    my $bartec = $self->feature('bartec');
+    $bartec = Integrations::Bartec->new(%$bartec);
+
+    # XXX At the time of writing, there does not seem to be a
+    # 'FREE BULKY USED' attribute defined in Bartec
+    $bartec->delete_premise_attribute( $c->stash->{property}{uprn},
+        'FREE BULKY USED' );
+}
 
 sub bin_services_for_address {
     my $self = shift;
     my $property = shift;
-
-    my %service_name_override = (
-        "Empty Bin 240L Black" => "Black Bin",
-        "Empty Bin 240L Brown" => "Brown Bin",
-        "Empty Bin 240L Green" => "Green Bin",
-        "Empty Black 240l Bin" => "Black Bin",
-        "Empty Brown 240l Bin" => "Brown Bin",
-        "Empty Green 240l Bin" => "Green Bin",
-        "Empty Bin Recycling 1100l" => "Recycling",
-        "Empty Bin Recycling 240l" => "Recycling",
-        "Empty Bin Recycling 660l" => "Recycling",
-        "Empty Bin Refuse 1100l" => "Refuse",
-        "Empty Bin Refuse 240l" => "Refuse",
-        "Empty Bin Refuse 660l" => "Refuse",
-    );
 
     $self->{c}->stash->{containers} = {
         # For new containers
@@ -543,38 +906,6 @@ sub bin_services_for_address {
         "LARGE BIN" => "360L Black", # Actually would be service 422
     };
 
-    if ( my $service_id = $self->{c}->get_param('service_id') ) {
-        # category to use for lid/wheel repairds depends on the container type that's been selected
-        $self->{c}->stash->{enquiry_cat_ids} = [ 497, 'lid', 'wheels' ];
-        $self->{c}->stash->{enquiry_cats} = {
-            497 => 'Not returned to collection point',
-            'lid' => $self->{c}->stash->{containers}->{$service_id} . ' - Lid',
-            'wheels' => $self->{c}->stash->{containers}->{$service_id} . ' - Wheels',
-        };
-        $self->{c}->stash->{enquiry_verbose} = {
-            'Not returned to collection point' => 'The bin wasn’t returned to the collection point',
-            $self->{c}->stash->{containers}->{$service_id} . ' - Lid' => 'The bin’s lid is damaged',
-            $self->{c}->stash->{containers}->{$service_id} . ' - Wheels' => 'The bin’s wheels are damaged',
-        };
-        $self->{c}->stash->{enquiry_open_ids} = {
-            6533 => { # 240L Black
-                497 => 497,
-                'lid' => 538,
-                'wheels' => 541,
-            },
-            6534 => { # 240L Green
-                497 => 497,
-                'lid' => 537,
-                'wheels' => 540,
-            },
-            6579 => { # 240L Brown
-                497 => 497,
-                'lid' => 539,
-                'wheels' => 542,
-            },
-        };
-    }
-
     my %container_request_ids = (
         6533 => [ 419 ], # 240L Black
         6534 => [ 420 ], # 240L Green
@@ -590,10 +921,10 @@ sub bin_services_for_address {
         # small food caddy?
     );
 
-    my %container_removal_ids = (
-        6533 => [ 487 ], # 240L Black
-        6534 => [ 488 ], # 240L Green
-        6579 => [ 489 ], # 240L Brown
+    my %container_service_ids = (
+        6533 => 255, # 240L Black
+        6534 => 254, # 240L Green
+        6579 => 253, # 240L Brown
         6836 => undef, # Refuse 1100l
         6837 => undef, # Refuse 660l
         6839 => undef, # Refuse 240l
@@ -605,7 +936,7 @@ sub bin_services_for_address {
 
     my %container_request_max = (
         6533 => 1, # 240L Black
-        6534 => 2, # 240L Green (max 2 per household, need to check how many property already has dynamically)
+        6534 => 1, # 240L Green
         6579 => 1, # 240L Brown
         6836 => undef, # Refuse 1100l
         6837 => undef, # Refuse 660l
@@ -621,13 +952,37 @@ sub bin_services_for_address {
     my $bartec = $self->feature('bartec');
     $bartec = Integrations::Bartec->new(%$bartec);
 
-    # TODO parallelize these calls if performance is an issue
-    my $jobs = $bartec->Jobs_Get($property->{uprn});
-    my $job_dates = $bartec->Jobs_FeatureScheduleDates_Get($property->{uprn});
-    my $schedules = $bartec->Features_Schedules_Get($property->{uprn});
-    my $events_uprn = $bartec->Premises_Events_Get($property->{uprn});
-    my $events_usrn = $bartec->Streets_Events_Get($property->{usrn});
-    my $open_requests = $self->open_service_requests_for_uprn($property->{uprn}, $bartec);
+    my $uprn = $property->{uprn};
+
+    my @calls = (
+        Jobs_Get => [ $uprn ],
+        Features_Schedules_Get => [ $uprn ],
+        Jobs_FeatureScheduleDates_Get => [ $uprn ],
+        Premises_Detail_Get => [ $uprn ],
+        Premises_Events_Get => [ $uprn ],
+        Streets_Events_Get => [ $property->{usrn} ],
+        ServiceRequests_Get => [ $uprn ],
+        Premises_Attributes_Get => [ $uprn ],
+    );
+    my $results = $bartec->call_api($self->{c}, 'peterborough', 'bin_services_for_address:' . $uprn, @calls);
+
+    my $jobs = $results->{"Jobs_Get $uprn"};
+    my $schedules = $results->{"Features_Schedules_Get $uprn"};
+    my $jobs_featureschedules = $results->{"Jobs_FeatureScheduleDates_Get $uprn"};
+    my $detail_uprn = $results->{"Premises_Detail_Get $uprn"};
+    my $events_uprn = $results->{"Premises_Events_Get $uprn"};
+    my $events_usrn = $results->{"Streets_Events_Get " . $property->{usrn}};
+    my $requests = $results->{"ServiceRequests_Get $uprn"};
+    my $attributes = $results->{"Premises_Attributes_Get $uprn"};
+
+    my $code = $detail_uprn->{BLPUClassification}{ClassificationCode} || '';
+    $property->{commercial_property} = $code =~ /^C/;
+
+    my %attribs = map { $_->{AttributeDefinition}->{Name} => 1 } @$attributes;
+    $property->{attributes} = \%attribs;
+
+    my $job_dates = relevant_jobs($jobs_featureschedules, $uprn, $schedules);
+    my $open_requests = $self->open_service_requests_for_uprn($uprn, $requests);
 
     my %feature_to_workpack;
     foreach (@$jobs) {
@@ -646,7 +1001,8 @@ sub bin_services_for_address {
         my $date = construct_bin_date($_->{EventDate})->ymd;
         my $type = $_->{EventType}{Description};
         next unless $lock_out_types{$type};
-        $premise_dates_to_lock_out{$date}{$container_id} = $type;
+        my $types = $premise_dates_to_lock_out{$date}{$container_id} ||= [];
+        push @$types, $type;
     }
     foreach (@$events_usrn) {
         my $workpack = $_->{Workpack}{Name};
@@ -677,34 +1033,39 @@ sub bin_services_for_address {
         next if $seen_containers{$container_id};
         $seen_containers{$container_id} = 1;
 
-        my $report_service_ids = $container_removal_ids{$container_id};
-        my @report_service_ids_open = grep { $open_requests->{$_} } @$report_service_ids;
+        my $report_service_id = $container_service_ids{$container_id};
+        my @report_service_ids_open = grep { $open_requests->{$_} } $report_service_id;
         my $request_service_ids = $container_request_ids{$container_id};
-        my @request_service_ids_open = grep { $open_requests->{$_} } @$request_service_ids;
+        # Open request for same thing, or for all bins, or for large black bin
+        my @request_service_ids_open = grep { $open_requests->{$_} || $open_requests->{425} || ($_ == 419 && $open_requests->{422}) } @$request_service_ids;
 
+        my %requests_open = map { $_ => 1 } @request_service_ids_open;
+
+        my $last_obj = { date => $last, ordinal => ordinal($last->day) } if $last;
+        my $next_obj = { date => $next, ordinal => ordinal($next->day) } if $next;
         my $row = {
             id => $_->{JobID},
-            last => { date => $last, ordinal => ordinal($last->day) },
-            next => { date => $next, ordinal => ordinal($next->day) },
-            service_name => $service_name_override{$name} || $name,
+            last => $last_obj,
+            next => $next_obj,
+            service_name => service_name_override()->{$name} || $name,
             schedule => $schedules{$name}->{Frequency},
             service_id => $container_id,
-            request_containers => $container_request_ids{$container_id},
+            request_containers => $request_service_ids,
 
             # can this container type be requested?
             request_allowed => $container_request_ids{$container_id} ? 1 : 0,
             # what's the maximum number of this container that can be request?
             request_max => $container_request_max{$container_id} || 0,
             # is there already an open bin request for this container?
-            request_open => @request_service_ids_open ? 1 : 0,
+            requests_open => \%requests_open,
             # can this collection be reported as having been missed?
-            report_allowed => $self->_waste_report_allowed($last),
+            report_allowed => $last ? $self->_waste_report_allowed($last) : 0,
             # is there already a missed collection report open for this container
             # (or a missed assisted collection for any container)?
             report_open => ( @report_service_ids_open || $open_requests->{492} ) ? 1 : 0,
         };
         if ($row->{report_allowed}) {
-            # We only get here if we're within the 2.5 day window after the collection.
+            # We only get here if we're within the 1.5 day window after the collection.
             # Set this so missed food collections can always be reported, as they don't
             # have their own collection event.
             $self->{c}->stash->{any_report_allowed} = 1;
@@ -714,19 +1075,21 @@ sub bin_services_for_address {
             if ($last->ymd eq $now->ymd && $now->hour < 17) {
                 my $is_staff = $self->{c}->user_exists && $self->{c}->user->from_body && $self->{c}->user->from_body->name eq "Peterborough City Council";
                 $row->{report_allowed} = $is_staff ? 1 : 0;
-                $row->{report_locked_out} = "ON DAY PRE 5PM";
+                $row->{report_locked_out} = [ "ON DAY PRE 5PM" ];
+                # Set a global flag to show things in the sidebar
+                $self->{c}->stash->{on_day_pre_5pm} = 1;
             }
             # But if it has been marked as locked out, show that
-            if (my $type = $premise_dates_to_lock_out{$last->ymd}{$container_id}) {
+            if (my $types = $premise_dates_to_lock_out{$last->ymd}{$container_id}) {
                 $row->{report_allowed} = 0;
-                $row->{report_locked_out} = $type;
+                $row->{report_locked_out} = $types;
             }
         }
         # Last date is last successful collection. If whole street locked out, it hasn't started
         my $workpack = $feature_to_workpack{$name} || '';
         if (my $lockout = $street_workpacks_to_lock_out{$workpack}) {
             $row->{report_allowed} = 0;
-            $row->{report_locked_out} = $lockout->{type};
+            $row->{report_locked_out} = [ $lockout->{type} ];
             my $last = $lockout->{date};
             $row->{last} = { date => $last, ordinal => ordinal($last->day) };
         }
@@ -735,29 +1098,60 @@ sub bin_services_for_address {
 
     # Some need to be added manually as they don't appear in Bartec responses
     # as they're not "real" collection types (e.g. requesting all bins)
-    push @out, {
+
+    my $bags_only = $self->{c}->get_param('bags_only');
+    my $skip_bags = $self->{c}->get_param('skip_bags');
+
+    @out = () if $bags_only;
+
+    my @food_containers;
+    if ($bags_only) {
+        push(@food_containers, 428) unless $open_requests->{428};
+    } else {
+        unless ( $open_requests->{493} || $open_requests->{425} ) { # Both food bins, or all bins
+            push(@food_containers, 424) unless $open_requests->{424}; # Large food caddy
+            push(@food_containers, 423) unless $open_requests->{423}; # Small food caddy
+        }
+        push(@food_containers, 428) unless $skip_bags || $open_requests->{428};
+    }
+
+    push(@out, {
         id => "FOOD_BINS",
         service_name => "Food bins",
         service_id => "FOOD_BINS",
-        request_containers => [ 424, 423, 428 ],
+        request_containers => \@food_containers,
         request_allowed => 1,
         request_max => 1,
         request_only => 1,
-        report_only => 1,
-    };
+        report_only => !$open_requests->{252}, # Can report if no open report
+    }) if @food_containers;
 
-    # We want this one to always appear first
-    unshift @out, {
-        id => "_ALL_BINS",
-        service_name => "All bins",
-        service_id => "_ALL_BINS",
-        request_containers => [ 425 ],
-        request_allowed => 1,
-        request_max => 1,
-        request_only => 1,
-    };
-
+    # All bins, black bin, green bin, large black bin, small food caddy, large food caddy, both food bins
+    my $any_open_bin_request = any { $open_requests->{$_} } (425, 419, 420, 422, 423, 424, 493);
+    unless ( $bags_only || $any_open_bin_request ) {
+        # We want this one to always appear first
+        unshift @out, {
+            id => "_ALL_BINS",
+            service_name => "All bins",
+            service_id => "_ALL_BINS",
+            request_containers => [ 425 ],
+            request_allowed => 1,
+            request_max => 1,
+            request_only => 1,
+        };
+    }
     return \@out;
+}
+
+sub relevant_jobs {
+    my ($jobs, $uprn, $schedules) = @_;
+    my %schedules = map { $_->{JobName} => $_ } @$schedules;
+    my @jobs = grep {
+        my $name = $_->{JobName};
+        $schedules{$name}->{Feature}->{Status}->{Name} eq 'IN SERVICE'
+        && $schedules{$name}->{Feature}->{FeatureType}->{ID} != 6815;
+    } @$jobs;
+    return \@jobs;
 }
 
 sub _waste_report_allowed {
@@ -769,7 +1163,7 @@ sub _waste_report_allowed {
     #  A bin not collected on Thursday can be rung through up to noon Monday
 
     my $wd = FixMyStreet::WorkingDays->new(public_holidays => FixMyStreet::Cobrand::UK::public_holidays());
-    $dt = $wd->add_days($dt, 2);
+    $dt = $wd->add_days($dt, 1);
     $dt->set( hour => 12, minute => 0, second => 0 );
     my $now = DateTime->now->set_time_zone(FixMyStreet->local_time_zone);
     return $now <= $dt;
@@ -781,7 +1175,10 @@ sub bin_future_collections {
     my $bartec = $self->feature('bartec');
     $bartec = Integrations::Bartec->new(%$bartec);
 
-    my $jobs = $bartec->Jobs_FeatureScheduleDates_Get($self->{c}->stash->{property}{uprn});
+    my $uprn = $self->{c}->stash->{property}{uprn};
+    my $schedules = $bartec->Features_Schedules_Get($uprn);
+    my $jobs_featureschedules = $bartec->Jobs_FeatureScheduleDates_Get($uprn);
+    my $jobs = relevant_jobs($jobs_featureschedules, $uprn, $schedules);
 
     my $events = [];
     foreach (@$jobs) {
@@ -792,9 +1189,7 @@ sub bin_future_collections {
 }
 
 sub open_service_requests_for_uprn {
-    my ($self, $uprn, $bartec) = @_;
-
-    my $requests = $bartec->ServiceRequests_Get($uprn);
+    my ($self, $uprn, $requests) = @_;
 
     my %open_requests;
     foreach (@$requests) {
@@ -805,20 +1200,6 @@ sub open_service_requests_for_uprn {
         $open_requests{$service_id} = 1;
     }
     return \%open_requests;
-}
-
-sub property_attributes {
-    my ($self, $uprn, $bartec) = @_;
-
-    unless ($bartec) {
-        $bartec = $self->feature('bartec');
-        $bartec = Integrations::Bartec->new(%$bartec);
-    }
-
-    my $attributes = $bartec->Premises_Attributes_Get($uprn);
-    my %attribs = map { $_->{AttributeDefinition}->{Name} => 1 } @$attributes;
-
-    return \%attribs;
 }
 
 sub waste_munge_request_form_data {
@@ -838,8 +1219,7 @@ sub waste_munge_request_form_data {
 sub waste_munge_report_form_data {
     my ($self, $data) = @_;
 
-    my $uprn = $self->{c}->stash->{property}->{uprn};
-    my $attributes = $self->property_attributes($uprn);
+    my $attributes = $self->{c}->stash->{property}->{attributes};
 
     if ( $attributes->{"ASSISTED COLLECTION"} ) {
         # For assisted collections we just raise a single "missed assisted collection"
@@ -882,12 +1262,201 @@ sub waste_munge_request_data {
     my $address = $c->stash->{property}->{address};
     my $container = $c->stash->{containers}{$id};
     my $quantity = $data->{"quantity-$id"};
+    my $reason = $data->{request_reason} || '';
+
+    $reason = {
+        cracked => "Cracked bin\n\nPlease remove cracked bin.",
+        lost_stolen => 'Lost/stolen bin',
+        new_build => 'New build',
+        other_staff => '(Other - PD STAFF)',
+    }->{$reason} || $reason;
+
     $data->{title} = "Request new $container";
     $data->{detail} = "Quantity: $quantity\n\n$address";
-    if (my $reason = $data->{"reason-$id"}) {
-        $data->{detail} .= "\n\nReason: $reason";
+    $data->{detail} .= "\n\nReason: $reason" if $reason;
+
+    if ( $data->{extra_detail} ) {
+        $data->{detail} .= "\n\nExtra detail: " . $data->{extra_detail};
     }
+
     $data->{category} = $self->body->contacts->find({ email => "Bartec-$id" })->category;
+}
+
+sub waste_munge_bulky_data {
+    my ($self, $data) = @_;
+
+    my $c = $self->{c};
+
+    $data->{title} = "Bulky goods collection";
+    $data->{detail} = "Address: " . $c->stash->{property}->{address};
+    $data->{category} = "Bulky collection";
+    $data->{extra_DATE} = $data->{chosen_date};
+
+    my $max = $self->bulky_items_maximum;
+    for (1..$max) {
+        my $two = sprintf("%02d", $_);
+        $data->{"extra_ITEM_$two"} = $data->{"item_$_"};
+    }
+
+    $self->bulky_total_cost($data);
+
+    $data->{"extra_CREW NOTES"} = $data->{location};
+}
+
+sub waste_reconstruct_bulky_data {
+    my ($self, $p) = @_;
+
+    my $saved_data = {
+        "chosen_date" => $p->get_extra_field_value('DATE'),
+        "location" => $p->get_extra_field_value('CREW NOTES'),
+        "location_photo" => $p->get_extra_metadata("location_photo"),
+    };
+    my @fields = grep { $_->{name} =~ /ITEM_/ } @{$p->get_extra_fields};
+    foreach (@fields) {
+        my ($id) = $_->{name} =~ /ITEM_(\d+)/;
+        $saved_data->{"item_" . ($id+0)} = $_->{value};
+        $saved_data->{"item_photo_" . ($id+0)} = $p->get_extra_metadata("item_photo_" . ($id+0));
+    }
+
+    return $saved_data;
+}
+
+sub bulky_free_collection_available {
+    my $self = shift;
+    my $c = $self->{c};
+
+    my $cfg = $self->wasteworks_config;
+
+    my $attributes = $c->stash->{property}->{attributes};
+    my $free_collection_available = !$attributes->{'FREE BULKY USED'};
+
+    return $cfg->{free_mode} && $free_collection_available;
+}
+
+# For displaying before user books collection. In the case of individually
+# priced items, we cannot know what the total cost will be, so we return the
+# lowest cost.
+sub bulky_minimum_cost {
+    my $self = shift;
+
+    my $cfg = $self->wasteworks_config;
+
+    if ( $cfg->{per_item_costs} ) {
+        # Get the item with the lowest cost
+        my @sorted = sort { $a <=> $b }
+            map { $_->{price} } @{ $self->bulky_items_master_list };
+
+        return $sorted[0] // 0;
+    } else {
+        return $cfg->{base_price} // 0;
+    }
+}
+
+sub bulky_total_cost {
+    my ($self, $data) = @_;
+    my $c = $self->{c};
+
+    if ($self->bulky_free_collection_available) {
+        $data->{extra_CHARGEABLE} = 'FREE';
+        $c->stash->{payment} = 0;
+    } else {
+        $data->{extra_CHARGEABLE} = 'CHARGED';
+
+        my $cfg = $self->wasteworks_config;
+        if ($cfg->{per_item_costs}) {
+            my %prices = map { $_->{name} => $_->{price} } @{ $self->bulky_items_master_list };
+            my $total = 0;
+            for (1..5) {
+                my $item = $data->{"item_$_"} or next;
+                $total += $prices{$item};
+            }
+            $c->stash->{payment} = $total;
+        } else {
+            $c->stash->{payment} = $cfg->{base_price};
+        }
+        $data->{"extra_payment_method"} = "credit_card";
+    }
+    return $c->stash->{payment};
+}
+
+sub waste_cc_payment_line_item_ref {
+    my ($self, $p) = @_;
+    return "BULKY-" . $p->get_extra_field_value('uprn') . "-" .$p->get_extra_field_value('DATE');
+}
+
+sub waste_cc_payment_admin_fee_line_item_ref {
+    my ($self, $p) = @_;
+    return "BULKY-" . $p->get_extra_field_value('uprn') . "-" .$p->get_extra_field_value('DATE');
+}
+
+sub waste_cc_payment_sale_ref {
+    my ($self, $p) = @_;
+    return "BULKY-" . $p->get_extra_field_value('uprn') . "-" .$p->get_extra_field_value('DATE');
+}
+
+sub bin_payment_types {
+    return {
+        'csc' => 1,
+        'credit_card' => 2,
+        'direct_debit' => 3,
+    };
+}
+
+sub waste_check_staff_payment_permissions {
+    my $self = shift;
+    my $c = $self->{c};
+
+    return unless $c->stash->{is_staff};
+
+    $c->stash->{staff_payments_allowed} = 'paye';
+}
+
+sub open311_contact_meta_override {
+    my ($self, $service, $contact, $meta) = @_;
+
+    if ( $service->{service_name} eq 'Bulky collection' ) {
+        push @$meta, {
+            code => 'payment',
+            datatype => 'string',
+            description => 'Payment',
+            order => 101,
+            required => 'false',
+            variable => 'true',
+            automated => 'hidden_field',
+        }, {
+            code => 'payment_method',
+            datatype => 'string',
+            description => 'Payment method',
+            order => 101,
+            required => 'false',
+            variable => 'true',
+            automated => 'hidden_field',
+        }, {
+            code => 'property_id',
+            datatype => 'string',
+            description => 'Property ID',
+            order => 101,
+            required => 'false',
+            variable => 'true',
+            automated => 'hidden_field',
+        };
+    }
+}
+
+sub waste_munge_bulky_cancellation_data {
+    my ( $self, $data ) = @_;
+
+    my $c = $self->{c};
+    my $collection_report = $c->stash->{property}{pending_bulky_collection};
+
+    $data->{title}    = 'Bulky goods cancellation';
+    $data->{category} = 'Bulky cancel';
+    $data->{detail} .= " | Original report ID: " . $collection_report->id;
+
+    $c->set_param( 'COMMENTS', 'Cancellation at user request' );
+
+    my $original_sr_number = $collection_report->external_id =~ s/Bartec-//r;
+    $c->set_param( 'ORIGINAL_SR_NUMBER', $original_sr_number );
 }
 
 sub waste_munge_report_data {
@@ -911,8 +1480,7 @@ sub waste_munge_report_data {
     my $service_id = $container_service_ids{$id};
 
     if ($service_id == 255) {
-        my $uprn = $c->stash->{property}->{uprn};
-        my $attributes = $self->property_attributes($uprn);
+        my $attributes = $c->stash->{property}->{attributes};
         if ($attributes->{"LARGE BIN"}) {
             # For large bins, we need different text to show
             $id = "LARGE BIN";
@@ -926,6 +1494,7 @@ sub waste_munge_report_data {
     } else {
         my $container = $c->stash->{containers}{$id};
         $data->{title} = "Report missed $container";
+        $data->{title} .= " bin" if $container !~ /^Food/;
         $data->{detail} = $c->stash->{property}->{address};
     }
 
@@ -936,71 +1505,159 @@ sub waste_munge_report_data {
     $data->{category} = $self->body->contacts->find({ email => "Bartec-$service_id" })->category;
 }
 
-sub waste_munge_enquiry_data {
-    my ($self, $data) = @_;
+sub waste_munge_problem_data {
+    my ($self, $id, $data) = @_;
     my $c = $self->{c};
 
-    my $service_id = $c->get_param('service_id');
-    my $category = $c->get_param('category');
+    my $service_details = $self->{c}->stash->{services_problems}->{$id};
+    my $container_id = $service_details->{container} || 0; # 497 doesn't have a container
 
-    my $verbose = $c->stash->{enquiry_verbose};
-    my $category_verbose = $verbose->{$category} || $category;
+    my $category = $self->body->contacts->find({ email => "Bartec-$id" })->category;
+    my $category_verbose = $service_details->{label};
 
-    if ($service_id == 6533 && $category =~ /Lid|Wheels/) { # 240L Black repair
-        my $uprn = $c->stash->{property}->{uprn};
-        my $attributes = $self->property_attributes($uprn);
+    if ($container_id == 6533 && $category =~ /Lid|Wheels/) { # 240L Black repair
+        my $attributes = $c->stash->{property}->{attributes};
         if ($attributes->{"LARGE BIN"}) {
             # For large bins, we need to raise a new bin request instead
-            $service_id = "LARGE BIN";
+            $container_id = "LARGE BIN";
             $category = 'Black 360L bin';
             $category_verbose .= ", exchange bin";
         }
     }
 
-    my $bin = $c->stash->{containers}{$service_id};
+    my $bin = $c->stash->{containers}{$container_id};
     $data->{category} = $category;
-    $data->{title} = $bin;
-    $data->{detail} = $category_verbose . "\n\n" . $c->stash->{property}->{address};
+    if ($category_verbose =~ /cracked/) {
+        my $address = $c->stash->{property}->{address};
+        $data->{title} = "Request new $bin";
+        $data->{detail} = "Quantity: 1\n\n$address";
+        $data->{detail} .= "\n\nReason: Cracked bin\n\nPlease remove cracked bin.";
+    } else {
+        $data->{title} = $category =~ /Lid|Wheels/ ? "Damaged $bin bin" :
+                         $category =~ /Not returned/ ? "Bin not returned" : $bin;
+        $data->{detail} = "$category_verbose\n\n" . $c->stash->{property}->{address};
+    }
 
-    if ( $data->{extra_extra_detail} ) {
-        $data->{detail} .= "\n\nExtra detail: " . $data->{extra_extra_detail};
+    if ( $data->{extra_detail} ) {
+        $data->{detail} .= "\n\nExtra detail: " . $data->{extra_detail};
     }
 }
 
-sub waste_munge_enquiry_form_fields {
+sub waste_munge_problem_form_fields {
     my ($self, $field_list) = @_;
 
-    # ConfirmValidation enforces a maxlength of 2000 on the overall report body.
-    # Limiting the fields at this point makes it less likely the user will
-    # see a validation error several steps after entering their text, at the
-    # confirmation step.
-    my %fields = @$field_list;
-    foreach (values %fields) {
-        if ($_->{type} eq 'TextArea')  {
-            $_->{maxlength} = 1000;
+    my %services_problems = (
+        538 => {
+            container => 6533,
+            container_name => "Black bin",
+            label => "The bin’s lid is damaged",
+        },
+        541 => {
+            container => 6533,
+            container_name => "Black bin",
+            label => "The bin’s wheels are damaged",
+        },
+        419 => {
+            container => 6533,
+            container_name => "Black bin",
+            label => "The bin is cracked",
+        },
+        537 => {
+            container => 6534,
+            container_name => "Green bin",
+            label => "The bin’s lid is damaged",
+        },
+        540 => {
+            container => 6534,
+            container_name => "Green bin",
+            label => "The bin’s wheels are damaged",
+        },
+        420 => {
+            container => 6534,
+            container_name => "Green bin",
+            label => "The bin is cracked",
+        },
+        539 => {
+            container => 6579,
+            container_name => "Brown bin",
+            label => "The bin’s lid is damaged",
+        },
+        542 => {
+            container => 6579,
+            container_name => "Brown bin",
+            label => "The bin’s wheels are damaged",
+        },
+        497 => {
+            container_name => "General",
+            label => "The bin wasn’t returned to the collection point",
+        },
+    );
+    $self->{c}->stash->{services_problems} = \%services_problems;
+
+    my %services;
+    foreach (keys %services_problems) {
+        my $v = $services_problems{$_};
+        next unless $v->{container};
+        $services{$v->{container}} ||= {};
+        $services{$v->{container}}{$_} = $v->{label};
+    }
+
+    my $open_requests = $self->{c}->stash->{open_service_requests};
+    @$field_list = ();
+
+    foreach (@{$self->{c}->stash->{service_data}}) {
+        my $id = $_->{service_id};
+        my $name = $_->{service_name};
+
+        next unless $services{$id};
+
+        # Don't allow any problem reports on a bin if a new one is currently
+        # requested. Check for large bin requests for black bins as well
+        # 419/420 are new black/green bin requests, 422 is large black bin request
+        # 6533/6534 are black/green containers
+        my $black_bin_request = (($open_requests->{419} || $open_requests->{422}) && $id == 6533);
+        my $green_bin_request = ($open_requests->{420} && $id == 6534);
+
+        my $categories = $services{$id};
+        foreach (sort keys %$categories) {
+            my $cat_name = $categories->{$_};
+            my $disabled = $open_requests->{$_} || $black_bin_request || $green_bin_request;
+            push @$field_list, "service-$_" => {
+                type => 'Checkbox',
+                label => $name,
+                option_label => $cat_name,
+                disabled => $disabled,
+            };
+
+            # Set this to empty so the heading isn't shown multiple times
+            $name = '';
         }
     }
+    push @$field_list, "service-497" => {
+        type => 'Checkbox',
+        label => $self->{c}->stash->{services_problems}->{497}->{container_name},
+        option_label => $self->{c}->stash->{services_problems}->{497}->{label},
+        disabled => $open_requests->{497},
+    };
+    push @$field_list, "extra_detail" => {
+        type => 'Text',
+        widget => 'Textarea',
+        label => 'Please supply any additional information such as the location of the bin.',
+        maxlength => 1_000,
+        messages => {
+            text_maxlength => 'Please use 1000 characters or less for additional information.',
+        },
+    };
+
 }
 
-sub bin_request_form_extra_fields {
-    my ($self, $service, $container_id, $field_list) = @_;
-
-    if ($container_id =~ /419|425/) { # Request New Black 240L
-        # Add a new "reason" field
-        push @$field_list, "reason-$container_id" => {
-            type => 'Text',
-            label => 'Why do you need new bins?',
-            tags => {
-                initial_hidden => 1,
-            },
-            required_when => { "container-$container_id" => 1 },
-        };
-        # And make sure it's revealed when the box is ticked
-        my %fields = @$field_list;
-        $fields{"container-$container_id"}{tags}{toggle} .= ", #form-reason-$container_id-row";
-    }
+sub waste_request_form_first_next {
+    my $self = shift;
+    $self->{c}->stash->{form_class} = 'FixMyStreet::App::Form::Waste::Request::Peterborough';
+    $self->{c}->stash->{form_title} = 'Which bins do you need?';
+    return 'replacement' unless $self->{c}->get_param('bags_only');
+    return 'about_you';
 }
-
 
 sub _format_address {
     my ($self, $property) = @_;
@@ -1011,5 +1668,161 @@ sub _format_address {
 }
 
 sub bin_day_format { '%A, %-d~~~ %B %Y' }
+
+sub available_permissions {
+    my $self = shift;
+
+    my $perms = $self->next::method();
+
+    my $features = $self->feature('waste_features') || {};
+    if ( $features->{admin_config_enabled} ) {
+        $perms->{Waste}->{wasteworks_config} = "Can edit WasteWorks configuration";
+    }
+
+    return $perms;
+}
+
+sub bulky_enabled {
+    my $self = shift;
+
+    # $self->{c} is undefined if this cobrand was instantiated by
+    # get_cobrand_handler instead of being the current active cobrand
+    # for this request.
+    my $c = $self->{c} || FixMyStreet::DB->schema->cobrand->{c};
+
+    my $cfg = $self->feature('waste_features') || {};
+
+    if ($self->bulky_enabled_staff_only) {
+        return $c->user_exists && (
+            $c->user->is_superuser
+            || ( $c->user->from_body && $c->user->from_body->name eq $self->council_name)
+        );
+    } else {
+        return $cfg->{bulky_enabled};
+    }
+}
+
+sub bulky_enabled_staff_only {
+    my $self = shift;
+
+    my $cfg = $self->feature('waste_features') || {};
+
+    return $cfg->{bulky_enabled} && $cfg->{bulky_enabled} eq 'staff';
+}
+
+sub bulky_available_feature_types {
+    my $self = shift;
+
+    return unless $self->bulky_enabled;
+
+    my $cfg = $self->feature('bartec');
+    my $bartec = Integrations::Bartec->new(%$cfg);
+    my @types = @{ $bartec->Features_Types_Get() };
+
+    # Limit to the feature types that are for bulky waste
+    my $waste_cfg = $self->body->get_extra_metadata("wasteworks_config", {});
+    if ( my $classes = $waste_cfg->{bulky_feature_classes} ) {
+        my %classes = map { $_ => 1 } @$classes;
+        @types = grep { $classes{$_->{FeatureClass}->{ID}} } @types;
+    }
+    return { map { $_->{ID} => $_->{Name} } @types };
+}
+
+sub bulky_nice_collection_date {
+    my ($self, $date) = @_;
+    my $parser = DateTime::Format::Strptime->new( pattern => '%FT%T' );
+    my $dt = $parser->parse_datetime($date)->truncate( to => 'day' );
+    return $dt->strftime('%d %B');
+}
+
+sub bulky_nice_cancellation_cutoff_date {
+    my ( $self, $collection_date ) = @_;
+    my $parser = DateTime::Format::Strptime->new( pattern => '%FT%T' );
+    my $dt
+        = $parser->parse_datetime($collection_date)->truncate( to => 'day' );
+    $dt->subtract( minutes => 5 );
+    return $dt->strftime('%H:%M on %d %B %Y');
+}
+
+sub bulky_nice_item_list {
+    my ($self, $report) = @_;
+
+    my @fields = grep { $_->{name} =~ /ITEM_/ } @{$report->get_extra_fields};
+    return [ map { $_->{value} || () } @fields ];
+}
+
+sub bulky_reminders {
+    my ($self, $params) = @_;
+
+    # Can't see an easy way to find these apart from loop through them all.
+    # Is only daily.
+    my $collections = FixMyStreet::DB->resultset('Problem')->search({
+        category => 'Bulky collection',
+        state => [ FixMyStreet::DB::Result::Problem->open_states ], # XXX?
+    });
+    my $parser = DateTime::Format::Strptime->new( pattern => '%FT%T' );
+    my $now = DateTime->now->set_time_zone(FixMyStreet->local_time_zone);
+
+    while (my $report = $collections->next) {
+        my $r1 = $report->get_extra_metadata('reminder_1');
+        my $r3 = $report->get_extra_metadata('reminder_3');
+        next if $r1; # No reminders left to do
+
+        # XXX Need to check if the subscription has been cancelled and if so,
+        # do not send out the email.
+
+        my $date = $report->get_extra_field_value('DATE');
+        my $dt = $parser->parse_datetime($date)->truncate( to => 'day' );
+        my $d1 = $dt->clone->subtract(days => 1);
+        my $d3 = $dt->clone->subtract(days => 3);
+
+        my $h = {
+            report => $report,
+            cobrand => $self,
+        };
+
+        if (!$r3 && $now >= $d3 && $now < $d1) {
+            $h->{days} = 3;
+            $self->_bulky_send_reminder_email($report, $h, $params);
+            $report->set_extra_metadata(reminder_3 => 1);
+            $report->update;
+        } elsif ($now >= $d1 && $now < $dt) {
+            $h->{days} = 1;
+            $self->_bulky_send_reminder_email($report, $h, $params);
+            $report->set_extra_metadata(reminder_1 => 1);
+            $report->update;
+        }
+    }
+}
+
+sub _bulky_send_reminder_email {
+    my ($self, $report, $h, $params) = @_;
+
+    my $token = FixMyStreet::DB->resultset('Token')->new({
+        scope => 'email_sign_in',
+        data  => {
+            # This should be the view your collections page, most likely
+            r => $report->url,
+        }
+    });
+    $h->{url} = "/M/" . $token->token;
+
+    my $result = FixMyStreet::Email::send_cron(
+        FixMyStreet::DB->schema,
+        'waste/bulky-reminder.txt',
+        $h,
+        { To => [ [ $report->user->email, $report->name ] ] },
+        undef,
+        $params->{nomail},
+        $self,
+        $report->lang,
+    );
+    unless ($result) {
+        print "  ...success\n" if $params->{verbose};
+        $token->insert();
+    } else {
+        print " ...failed\n" if $params->{verbose};
+    }
+}
 
 1;
