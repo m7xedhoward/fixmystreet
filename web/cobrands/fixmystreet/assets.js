@@ -845,6 +845,7 @@ fixmystreet.assets = {
         'default': new OpenLayers.Style({
             fill: false,
             stroke: false
+           
         })
     }),
 
@@ -1215,7 +1216,7 @@ fixmystreet.message_controller = (function() {
         }
         $('.js-mobile-not-an-asset').remove();
         if (!$("#js-roads-responsibility .js-responsibility-message:not(.hidden)").length) {
-            $("#js-roads-responsibility").addClass("hidden");
+            $("#js-roads-responsibility").addClass("hidden")
         }
     }
 

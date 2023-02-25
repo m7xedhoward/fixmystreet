@@ -1,17 +1,31 @@
 package FixMyStreet::Cobrand::Northumberland;
-use parent 'FixMyStreet::Cobrand::Whitelabel';
 
+
+#use base 'FixMyStreet::Cobrand::Default';
+use base 'FixMyStreet::Cobrand::UKCouncils';
 use strict;
 use warnings;
-
 use Moo;
-with 'FixMyStreet::Roles::ConfirmValidation';
 
-sub council_area_id { 1740 }
-sub council_area { 'Northumberland' }
-sub council_name { 'Northumberland County Council' }
-sub council_url { 'www' }
+with 'FixMyStreet::Roles::Open311Alloy';
 
+
+#use LWP::Simple;
+#use URI;
+#use Try::Tiny;
+#use JSON::MaybeXS;
+
+sub council_area_id { return 1740; }
+#sub council_area_id { 2248 }
+
+sub council_area { return 'Northumberland Council'; }
+sub council_name { return 'Northumberland County Council';}
+sub council_url { return 'www'; }
+#sub site_key { return 'maply.co.uk'; }
+sub default_zoom { 16; }
+
+sub allow_anonymous_reports { 'button' }
+sub anonymous_account { { email => 'anon@maply.co.uk', name => 'Anonymous' } }
 
 sub enter_postcode_text { 'Enter a Northumberland postcode, street name and area, or check an existing report number' }
 
@@ -26,18 +40,25 @@ sub disambiguate_location {
     };
 }
 
-sub categories_restriction {
-    my ($self, $rs) = @_;
-    return $rs->search( { 'body.name' => [ 'Northumberland County Council' ] } );
-}
+#sub categories_restriction {
+#    my ($self, $rs) = @_;
+#    return $rs->search( { 'body.name' => [ "Northumberland County Council" ] } );
+#}
 
+
+sub problems_on_map_restriction {
+    my ($self, $rs) = @_;
+    # Northamptonshire don't want to show district/borough reports
+    # on the site
+    return $self->problems_restriction($rs);
+}
 sub send_questionnaires { 0 }
 
-sub on_map_default_status { 'open' }
+#sub on_map_default_status { 'open' }
 
 sub report_sent_confirmation_email { 'id' }
 
-sub admin_user_domain { 'maply.gov.uk' }
+sub admin_user_domain { '' }
 
 has body_obj => (
     is => 'lazy',
@@ -46,17 +67,24 @@ has body_obj => (
     },
 );
 
-sub updates_disallowed {
-    my $self = shift;
-    my ($problem) = @_;
+#has body_obj => (
+#    is => 'lazy',
+#    default => sub {
+#        FixMyStreet::DB->resultset('Body')->find({ name => 'Northumberland Council' });
+#    },
+#);
+
+#sub updates_disallowed {
+#    my $self = shift;
+#    my ($problem) = @_;
 
     # Only open reports
-    return 1 if $problem->is_fixed || $problem->is_closed;
+#    return 1 if $problem->is_fixed || $problem->is_closed;
     # Not on reports made by the body user
-    return 1 if $problem->user_id == $self->body_obj->comment_user_id;
-
-    return $self->next::method(@_);
-}
+#    return 1 if $problem->user_id == $self->body_obj->comment_user_id;
+#
+#    return $self->next::method(@_);
+#}
 
 sub is_defect {
     my ($self, $p) = @_;
@@ -69,45 +97,32 @@ sub pin_colour {
     return $self->SUPER::pin_colour($p, $context);
 }
 
+#sub pin_colour {
+#    my ( $self, $p, $context ) = @_;
+#    return 'grey' unless $self->owns_problem( $p );
+#    return 'grey' if $p->is_closed;
+#    return 'green' if $p->is_fixed;
+#    return 'yellow' if $p->state eq 'confirmed';
+#    return 'orange'; # all the other `open_states` like "in progress"
+#}
+
 #sub problems_on_map_restriction {
 #    my ($self, $rs) = @_;
 #    # Northumberland don't want to show district/borough reports
-#    # on the site
+    # on the site
 #    return $self->problems_restriction($rs);
 #}
 
-sub privacy_policy_url {
-    ''
-}
+#sub privacy_policy_url {
+#    ''
+#}
 
 sub is_two_tier { 0 }
 
 sub get_geocoder { 'OSM' }
 
-sub map_type { 'OSM' }
+sub map_type { 'FMS' }
 
-sub open311_config {
-    my ($self, $row, $h, $params) = @_;#
-
-    $params->{multi_photos} = 1;
-}
-
-sub open311_extra_data_include {
-    my ($self, $row, $h) = @_;
-
-    return [
-        { name => 'report_url',
-          value => $h->{url} },
-        { name => 'title',
-          value => $row->title },
-        { name => 'description',
-          value => $row->detail },
-        { name => 'category',
-          value => $row->category },
-    ];
-}
-
-sub open311_extra_data_exclude { [ 'emergency' ] }
 
 sub open311_get_update_munging {
     my ($self, $comment) = @_;
@@ -120,17 +135,15 @@ sub open311_get_update_munging {
    }
 }
 
-sub should_skip_sending_update {
-    my ($self, $comment) = @_;
+sub open311_config {
+    my ($self, $row, $h, $params) = @_;
 
-    my $p = $comment->problem;
-    my %body_users = map { $_->comment_user_id => 1 } values %{ $p->bodies };
-    if ( $body_users{ $p->user->id } ) {
-        return 1;
-    }
-
-   return 0;
+    $params->{multi_photos} = 1;
+    $params->{extended_description} = 'northumberland';
+    $params->{upload_files} = 1;
+    
 }
+
 
 sub report_validation {
     my ($self, $report, $errors) = @_;
@@ -140,13 +153,6 @@ sub report_validation {
   }
 }
 
-sub staff_ignore_form_disable_form {
-    my $self = shift;
 
-    my $c = $self->{c};
-
-   return $c->user_exists
-       && $c->user->belongs_to_body( $self->body->id );
-}
 
 1;
