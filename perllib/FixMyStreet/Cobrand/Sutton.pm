@@ -83,6 +83,19 @@ my %CONTAINERS = (
 );
 lock_hash(%CONTAINERS);
 
+=head2 CONTAINER_SWAPS_FROM
+
+This is a map for special case pricing when changing to the container size in the key from
+the container sizes in the value. If one of these swaps is detected then the change price
+of `request_change_cost_${value}_${key}` will be used instead of the usual `change_cost_$key`.
+
+=cut
+
+my %CONTAINER_SWAPS_FROM = (
+    refuse_140 => ['refuse_240'],
+    refuse_240 => ['refuse_360'],
+);
+
 =head2 skip_alert_state_changed_to
 
 Do not include the "State changed to" line on small item collection update alerts.
@@ -495,13 +508,11 @@ sub waste_munge_request_form_fields {
     my @radio_options;
     my @replace_options;
     my $costs = WasteWorks::Costs->new({ cobrand => $self });
-    my $change_cost = $costs->get_cost('request_change_cost');
     for (my $i=0; $i<@$field_list; $i+=2) {
         my ($key, $value) = ($field_list->[$i], $field_list->[$i+1]);
         next unless $key =~ /^container-(\d+)/;
         my $id = $1;
-
-        my ($cost, $hint) = $self->request_cost($id, $c->stash->{quantities});
+        my ($cost, $hint, $type) = $self->request_cost($id, $c->stash->{quantities});
 
         my $data = {
             value => $id,
@@ -509,7 +520,7 @@ sub waste_munge_request_form_fields {
             disabled => $value->{disabled},
             hint => $value->{option_hint} || $hint, # In progress overrides
         };
-        if ($cost && $change_cost && $cost == $change_cost) {
+        if ($type && $type eq 'change') {
             push @replace_options, $data;
         } else {
             push @radio_options, $data;
@@ -711,24 +722,30 @@ Calculate how much, if anything, a request for a container should be.
 sub request_cost {
     my ($self, $id, $containers) = @_;
     my $costs = WasteWorks::Costs->new({ cobrand => $self });
-    if (my $cost = $costs->get_cost('request_change_cost')) {
-        foreach ($CONTAINERS{refuse_140}, $CONTAINERS{refuse_240}, $CONTAINERS{paper_240}) {
-            if ($id == $_ && !$containers->{$_}) {
-                my $price = sprintf("£%.2f", $cost / 100);
-                $price =~ s/\.00$//;
-                my $hint = "There is a $price administration/delivery charge to change the size of your container";
-                return ($cost, $hint);
-            }
+    my %id_to_name = reverse %CONTAINERS;
+    my $cost_id = $id_to_name{$id};
+    # increasing container size does not cost the same as decreasing so put in a mechanism
+    # to allow specific prices for moving from one container size to another with a fallback
+    # to the generic change price for a container size
+    if (my $froms = $CONTAINER_SWAPS_FROM{$cost_id}) {
+        for my $from_container (@$froms) {
+            $cost_id = $from_container . '_' . $cost_id if $containers->{$CONTAINERS{$from_container}};
         }
     }
-    if (my $cost = $costs->get_cost('request_replace_cost')) {
-        foreach ($CONTAINERS{refuse_140}, $CONTAINERS{refuse_240}, $CONTAINERS{refuse_360}, $CONTAINERS{paper_240}) {
-            if ($id == $_ && $containers->{$_}) {
-                my $price = sprintf("£%.2f", $cost / 100);
-                $price =~ s/\.00$//;
-                my $hint = "There is a $price administration/delivery charge to replace your container";
-                return ($cost, $hint);
-            }
+    if (my $cost = $costs->get_cost('request_change_cost_' . $cost_id)) {
+        if (!$containers->{$id}) {
+            my $price = sprintf("£%.2f", $cost / 100);
+            $price =~ s/\.00$//;
+            my $hint = "There is a $price administration/delivery charge to change the size of your container";
+            return ($cost, $hint, 'change');
+        }
+    }
+    if (my $cost = $costs->get_cost('request_replace_cost_' . $id_to_name{$id})) {
+        if ($containers->{$id}) {
+            my $price = sprintf("£%.2f", $cost / 100);
+            $price =~ s/\.00$//;
+            my $hint = "There is a $price administration/delivery charge to replace your container";
+            return ($cost, $hint, 'replace');
         }
     }
 }
