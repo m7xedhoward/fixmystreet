@@ -429,10 +429,10 @@ sub add_media {
             }
         }
         if ($photo_blob) {
-            # Strip EXIF metadata and resize, same as user uploads
+            # Auto-orient using EXIF data, then strip metadata and resize
             $photo_blob = try {
                 FixMyStreet::ImageMagick->new(blob => $photo_blob)
-                    ->shrink('2048x2048')->as_blob(magick => 'JPEG');
+                    ->auto_orient->shrink('2048x2048')->as_blob(magick => 'JPEG');
             } catch { $photo_blob };
             push @photos, $photo_blob;
         }
