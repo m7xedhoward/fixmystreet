@@ -64,13 +64,12 @@ body_validation_rules = {
           maxlength: 100
         },
     },
-    'North Northamptonshire Council': confirm_validation_rules,
-    'Northamptonshire Highways': {
+    'North Northamptonshire Council': $.extend({
         title: {
           required: true,
           maxlength: 120
         }
-    },
+    }, confirm_validation_rules),
     'Oxfordshire County Council': {
         detail: {
           required: true,
@@ -121,5 +120,10 @@ body_validation_rules = {
           notEmail: true
       }
     },
-    'West Northamptonshire Council': confirm_validation_rules
+    'West Northamptonshire Council': $.extend({
+        title: {
+          required: true,
+          maxlength: 120
+        }
+    }, confirm_validation_rules)
 };
