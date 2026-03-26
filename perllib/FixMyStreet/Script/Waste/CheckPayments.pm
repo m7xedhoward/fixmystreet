@@ -23,7 +23,9 @@ sub check_payments {
     while (my $row = $problems->next) {
         $cobrand->set_lang_and_domain($row->lang, 1);
         my ($error, $reference);
-        if (my $scp = $row->get_extra_metadata('scpReference')) {
+        if (my $govukpay_id = $row->get_extra_metadata('govukpay_id')) {
+            ($error, $reference) = $cobrand->cc_check_payment_and_update($govukpay_id, $row);
+        } elsif (my $scp = $row->get_extra_metadata('scpReference')) {
             ($error, $reference) = $cobrand->cc_check_payment_and_update($scp, $row);
         } elsif (my $apn = $row->get_extra_metadata('apnReference')) {
             ($error, $reference) = $cobrand->paye_check_payment_and_update($apn, $row);
