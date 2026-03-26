@@ -23,6 +23,7 @@
         - Dashboard: toggle visibility of deleted categories and categories with no reports
         - Allow search of non-integer external IDs.
         - List categories that prevent reporting.
+        - Show report search on the admin summary page for staff with `user_edit`. #5903
     - Development improvements
         - More logging when `page_error` is called, to aid troubleshooting. #5279
         - Docker changes needed for systemd to work. #5257
