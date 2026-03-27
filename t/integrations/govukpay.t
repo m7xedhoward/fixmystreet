@@ -52,7 +52,7 @@ subtest 'create_payment sends correct request' => sub {
     $mock_response_code = 201;
     $mock_response_body = $json->encode({
         payment_id => 'hu20sqlact5260q2nanm0q8u93',
-        state      => { status => 'created', finished => JSON::MaybeXS::false },
+        state      => { status => 'created', finished => \0 },
         _links     => {
             next_url => { href => 'https://www.payments.service.gov.uk/secure/abc123' },
         },
@@ -110,7 +110,7 @@ subtest 'get_payment_details returns full data' => sub {
     $mock_response_code = 200;
     $mock_response_body = $json->encode({
         payment_id => 'abc123',
-        state      => { status => 'success', finished => JSON::MaybeXS::true },
+        state      => { status => 'success', finished => \1 },
         amount     => 2500,
         reference  => 'ORDER-001',
     });
@@ -127,7 +127,7 @@ subtest 'get_payment_status returns status string' => sub {
     $mock_response_code = 200;
     $mock_response_body = $json->encode({
         payment_id => 'abc123',
-        state      => { status => 'submitted', finished => JSON::MaybeXS::false },
+        state      => { status => 'submitted', finished => \0 },
     });
 
     my $status = $pay->get_payment_status('abc123');

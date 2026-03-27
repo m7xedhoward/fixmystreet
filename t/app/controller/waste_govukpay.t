@@ -1,7 +1,6 @@
 use Test::MockModule;
 use Test::MockTime qw(:all);
 use FixMyStreet::TestMech;
-use JSON::MaybeXS;
 
 # Test the GOVUKPay cobrand role through the Waste controller.
 #
@@ -152,7 +151,7 @@ $govukpay->mock('get_payment_details', sub {
         reference  => $sent_create_params->{reference} || 'FMS-0',
         state      => {
             status   => $payment_status,
-            finished => ($payment_status eq 'success' ? JSON::MaybeXS::true : JSON::MaybeXS::false),
+            finished => ($payment_status eq 'success' ? \1 : \0),
         },
     };
 });
