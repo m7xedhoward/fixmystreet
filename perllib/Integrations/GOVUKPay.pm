@@ -122,12 +122,14 @@ sub create_payment {
     my $url = $self->_api_url . '/v1/payments';
     my $body = $self->json->encode($payload);
 
-    my $req = HTTP::Request::Common::POST(
-        $url,
-        Content_Type => 'application/json',
-        Content      => $body,
-        $self->_headers,
-    );
+    my $req = HTTP::Request->new('POST', $url);
+    $req->header('Authorization' => 'Bearer ' . $self->config->{api_key});
+    $req->header('Content-Type'  => 'application/json');
+    $req->header('Accept'        => 'application/json');
+    $req->content($body);
+
+    $self->log("create_payment URL: $url");
+    $self->log("create_payment body: $body");
 
     my $response = $self->ua->request($req);
     my $data = $self->_decode_response($response, 'create_payment');
